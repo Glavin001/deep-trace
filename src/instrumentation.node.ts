@@ -562,9 +562,16 @@ function startServer() {
         }
     });
 
-    app.listen(SERVER_PORT, () => {
+    const server = app.listen(SERVER_PORT, () => {
         serverStarted = true;
         log.info(`Debug probe HTTP server listening on port ${SERVER_PORT}`);
+    });
+    server.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+            log.info(`Debug probe port ${SERVER_PORT} already in use, skipping server start`);
+        } else {
+            log.info(`Debug probe server error: ${err.message}`);
+        }
     });
 }
 
