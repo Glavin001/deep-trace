@@ -22,12 +22,14 @@ datasources:
         defaultDatabase: otel
         defaultTable: otel_traces
         otelEnabled: true
+        otelVersion: latest
+        durationUnit: nanoseconds
         traceIdColumn: TraceId
         spanIdColumn: SpanId
         parentSpanIdColumn: ParentSpanId
         serviceNameColumn: ServiceName
         operationNameColumn: SpanName
         startTimeColumn: Timestamp
-        durationTimeColumn: Duration
+        durationColumn: Duration
     secureJsonData:
       password: otel
