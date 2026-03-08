@@ -47,6 +47,7 @@ Grafana is available at `http://localhost:3002`.
 - Use the traces query mode to search recent spans, then open a trace to see the waterfall view.
 - A starter dashboard is provisioned at `http://localhost:3002/d/deep-trace-overview/deep-trace-overview`.
 - The dashboard is just a convenience panel; Grafana Explore is the primary trace UI for waterfall inspection.
+- If an old Explore tab still shows `NaNd NaNh` after a datasource mapping change, open a brand-new Explore tab or session. A simple refresh can keep stale trace-detail query state.
 
 ## Query examples
 
