@@ -41,7 +41,7 @@ NEXT_PUBLIC_OTEL_SERVICE_NAME=next-fullstack-web \
 npm run dev --prefix demos/next-fullstack
 ```
 
-Then open `http://127.0.0.1:3000`, emit a trace, and query ClickHouse:
+Then open `http://127.0.0.1:3000`, emit a trace, inspect Grafana at `http://127.0.0.1:3002`, and query ClickHouse:
 
 ```bash
 npm run query:recent --prefix demos/next-fullstack

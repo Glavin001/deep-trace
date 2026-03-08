@@ -27,6 +27,7 @@ This demo sends both browser and server spans into the shared local collector st
    ```
 
 4. Open `http://127.0.0.1:3000`, click the button, then query ClickHouse.
+5. Open `http://127.0.0.1:3002/explore` to inspect the same trace in Grafana's waterfall view with the provisioned `ClickHouse Traces` datasource.
 
 ## Query
 

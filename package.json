@@ -6,7 +6,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc --noEmit",
-    "stack:up": "docker compose -f stack/local-otel/compose.yaml up -d",
+    "stack:up": "bash scripts/prepare-grafana-clickhouse-plugin.sh && docker compose -f stack/local-otel/compose.yaml up -d",
     "stack:down": "docker compose -f stack/local-otel/compose.yaml down",
     "stack:logs": "docker compose -f stack/local-otel/compose.yaml logs --tail=50 clickhouse otel-collector",
     "demo:next:install": "npm install --prefix demos/next-fullstack",

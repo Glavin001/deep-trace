@@ -6,6 +6,7 @@ Shared local collector and storage for all demos in this repository.
 
 - `otel/opentelemetry-collector-contrib` receives OTLP traces on `4317` and `4318`.
 - `clickhouse/clickhouse-server` stores spans and exposes SQL over `8123`.
+- `grafana/grafana-oss` visualizes traces and recent spans on `3002`.
 - The collector writes to ClickHouse through `host.docker.internal:9000`, which works on Docker Desktop and is mapped explicitly for Linux in `compose.yaml`.
 
 ## Start
@@ -13,6 +14,8 @@ Shared local collector and storage for all demos in this repository.
 ```bash
 npm run stack:up
 ```
+
+`npm run stack:up` also downloads the Grafana ClickHouse plugin on the host before starting Grafana, which avoids plugin-install DNS issues inside the Docker sandbox.
 
 Or directly:
 
@@ -35,6 +38,15 @@ curl "http://localhost:8123/" --data-binary "SHOW TABLES FROM otel"
 ```
 
 The collector creates `otel.otel_traces` automatically on first insert.
+Grafana is available at `http://localhost:3002`.
+
+## Grafana trace UI
+
+- Open `http://localhost:3002/explore`.
+- The provisioned `ClickHouse Traces` datasource is the default.
+- Use the traces query mode to search recent spans, then open a trace to see the waterfall view.
+- A starter dashboard is provisioned at `http://localhost:3002/d/deep-trace-overview/deep-trace-overview`.
+- The dashboard is just a convenience panel; Grafana Explore is the primary trace UI for waterfall inspection.
 
 ## Query examples
 
