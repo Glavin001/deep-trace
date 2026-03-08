@@ -1,10 +1,11 @@
 /**
  * Local Debug Probe — instrumentation.node.ts
  *
- * Simplified, local-only version of Syncause's instrumentation.
- * No cloud connection. Spans go to:
+ * Simplified local instrumentation for development.
+ * Spans can flow to:
  *   1. In-memory ring buffer (queryable via HTTP on port 43210)
  *   2. JSONL file at .debug/traces.jsonl (persistent)
+ *   3. An OTLP HTTP collector endpoint (optional)
  *
  * Usage:
  *   node --import ./lib/debug-probe/instrumentation.node.ts your-app.ts
@@ -15,29 +16,37 @@
  */
 
 import { NodeSDK } from '@opentelemetry/sdk-node';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { ConsoleSpanExporter } from '@opentelemetry/sdk-trace-node';
-import { ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import {
+    BatchSpanProcessor,
+    ReadableSpan,
+    SimpleSpanProcessor,
+    SpanExporter,
+    SpanProcessor,
+} from '@opentelemetry/sdk-trace-base';
 import { ExportResultCode } from '@opentelemetry/core';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { trace, context, SpanStatusCode } from '@opentelemetry/api';
-import * as path from 'path';
 import * as fs from 'fs';
 import { inspect } from 'util';
 import express, { Request, Response } from 'express';
+import { buildRuntimeConfig, isInternalSpanRequest, RuntimeConfig } from './runtime-config';
 
 // ===== Configuration (env vars) =====
-const ENABLE_DEBUG_LOG = process.env.DEBUG_PROBE_LOG !== 'false';
-const ENABLE_CONSOLE_EXPORTER = process.env.DEBUG_PROBE_CONSOLE === 'true';
-const ENABLE_JSONL = process.env.DEBUG_PROBE_JSONL !== 'false';
-const JSONL_DIR = process.env.DEBUG_PROBE_DIR || path.join(process.cwd(), '.debug');
-const JSONL_FILE = path.join(JSONL_DIR, 'traces.jsonl');
-const MAX_SPANS = parseInt(process.env.DEBUG_PROBE_MAX_SPANS || '10000', 10);
-const SERVER_PORT = parseInt(process.env.DEBUG_PROBE_PORT || '43210', 10);
-const isDevelopment = process.env.NODE_ENV === 'development';
+const runtimeConfig = buildRuntimeConfig();
+const ENABLE_DEBUG_LOG = runtimeConfig.debugLogEnabled;
+const ENABLE_CONSOLE_EXPORTER = runtimeConfig.consoleExporterEnabled;
+const ENABLE_LOCAL_EXPORTER = runtimeConfig.localExporterEnabled;
+const ENABLE_JSONL = runtimeConfig.jsonlEnabled;
+const JSONL_DIR = runtimeConfig.jsonlDir;
+const JSONL_FILE = runtimeConfig.jsonlFile;
+const LOG_FILE = runtimeConfig.logFile;
+const MAX_SPANS = runtimeConfig.maxSpans;
+const SERVER_PORT = runtimeConfig.serverPort;
+const isDevelopment = runtimeConfig.isDevelopment;
 
 // ===== Logging (writes to .debug/probe.log, not stdout) =====
-const LOG_FILE = path.join(JSONL_DIR, 'probe.log');
-
 function ensureDir(dir: string): void {
     try {
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -235,48 +244,60 @@ function appendToJsonl(span: CachedSpan): void {
 
 // ===== Custom Span Exporter =====
 
-class LocalSpanExporter extends ConsoleSpanExporter {
+class LocalSpanExporter implements SpanExporter {
     private consoleEnabled: boolean;
+    private localExporterEnabled: boolean;
+    private consoleExporter?: ConsoleSpanExporter;
+    private config: RuntimeConfig;
 
-    constructor() {
-        super();
-        this.consoleEnabled = ENABLE_CONSOLE_EXPORTER;
+    constructor(config: RuntimeConfig = runtimeConfig) {
+        this.config = config;
+        this.consoleEnabled = config.consoleExporterEnabled;
+        this.localExporterEnabled = config.localExporterEnabled;
+        this.consoleExporter = this.consoleEnabled ? new ConsoleSpanExporter() : undefined;
     }
 
     private isOwnSpan(span: ReadableSpan): boolean {
-        const attrs = span.attributes;
-        const url = attrs['http.url'] as string | undefined;
-        const host = attrs['http.host'] as string | undefined;
-        const target = attrs['http.target'] as string | undefined;
-        if (url?.includes('localhost:' + SERVER_PORT) ||
-            url?.includes('127.0.0.1:' + SERVER_PORT) ||
-            host?.includes('localhost:' + SERVER_PORT) ||
-            host?.includes('127.0.0.1:' + SERVER_PORT) ||
-            target?.includes('/remote-debug/')) {
-            return true;
-        }
-        return false;
+        return isInternalSpanRequest(
+            {
+                url: span.attributes['http.url'] as string | undefined,
+                host: span.attributes['http.host'] as string | undefined,
+                target: span.attributes['http.target'] as string | undefined,
+            },
+            this.config,
+        );
     }
 
     export(spans: ReadableSpan[], resultCallback: (result: { code: number }) => void): void {
         try {
             const filtered = spans.filter(s => !this.isOwnSpan(s));
-            for (const s of filtered) {
-                spanCache.addSpan(s);
-                // Also get the cached version for JSONL
-                const cached = spanCache.getAllSpans().find(
-                    c => c.spanId === s.spanContext().spanId
-                );
-                if (cached) appendToJsonl(cached);
+            if (this.localExporterEnabled) {
+                for (const s of filtered) {
+                    spanCache.addSpan(s);
+                    const cached = spanCache.getAllSpans().find(
+                        c => c.spanId === s.spanContext().spanId,
+                    );
+                    if (cached) appendToJsonl(cached);
+                }
             }
-            if (this.consoleEnabled) {
-                super.export(filtered, resultCallback);
+
+            if (this.consoleEnabled && this.consoleExporter) {
+                this.consoleExporter.export(filtered, resultCallback);
             } else {
                 resultCallback?.({ code: ExportResultCode.SUCCESS });
             }
-        } catch {
+        } catch (error) {
+            log.error('Failed to export spans locally:', error);
             resultCallback?.({ code: ExportResultCode.FAILED });
         }
+    }
+
+    async shutdown(): Promise<void> {
+        await this.consoleExporter?.shutdown();
+    }
+
+    async forceFlush(): Promise<void> {
+        await this.consoleExporter?.forceFlush?.();
     }
 }
 
@@ -477,7 +498,7 @@ if (!isDevelopment) {
 let serverStarted = false;
 
 function startServer() {
-    if (serverStarted) return;
+    if (serverStarted || SERVER_PORT <= 0) return;
     const app = express();
 
     function formatSpan(s: CachedSpan) {
@@ -577,10 +598,34 @@ function startServer() {
 
 // ===== OTel SDK Init =====
 
-const sdk = new NodeSDK({
-    traceExporter: new LocalSpanExporter(),
-    instrumentations: isDevelopment ? [] : [getNodeAutoInstrumentations()],
-});
+export function createSpanProcessors(config: RuntimeConfig = runtimeConfig): SpanProcessor[] {
+    const processors: SpanProcessor[] = [new SimpleSpanProcessor(new LocalSpanExporter(config))];
+
+    if (config.otlpHttpEndpoint) {
+        processors.push(
+            new BatchSpanProcessor(
+                new OTLPTraceExporter({
+                    url: config.otlpHttpEndpoint,
+                    headers: config.otlpHeaders,
+                    concurrencyLimit: config.otlpConcurrencyLimit,
+                    timeoutMillis: config.otlpTimeoutMillis,
+                }),
+            ),
+        );
+    }
+
+    return processors;
+}
+
+export function createSdk(config: RuntimeConfig = runtimeConfig): NodeSDK {
+    return new NodeSDK({
+        serviceName: config.serviceName,
+        spanProcessors: createSpanProcessors(config),
+        instrumentations: config.isDevelopment ? [] : [getNodeAutoInstrumentations()],
+    });
+}
+
+const sdk = createSdk();
 
 export { sdk };
 
@@ -593,8 +638,10 @@ export function init() {
     startServer();
     log.info('Debug probe initialized');
     log.info(`  JSONL output: ${ENABLE_JSONL ? JSONL_FILE : 'disabled'}`);
-    log.info(`  HTTP API: http://localhost:${SERVER_PORT}/remote-debug/spans`);
+    log.info(`  HTTP API: ${SERVER_PORT > 0 ? `http://localhost:${SERVER_PORT}/remote-debug/spans` : 'disabled'}`);
     log.info(`  Console interception: ${isDevelopment ? 'disabled (dev mode)' : 'enabled'}`);
+    log.info(`  Service name: ${runtimeConfig.serviceName}`);
+    log.info(`  OTLP exporter: ${runtimeConfig.otlpHttpEndpoint || 'disabled'}`);
 }
 
 // Auto-init when loaded via --import or --require
@@ -607,8 +654,9 @@ export function getSpansByTraceId(traceId: string) { return spanCache.getByTrace
 export function getSpansByFunctionName(name: string) { return spanCache.getByFunctionName(name); }
 export function clearSpans() { spanCache.clear(); }
 export function getSpanStats() { return spanCache.statistics(); }
+export function getRuntimeConfig() { return runtimeConfig; }
 /** Force-flush the OTel batch processor so spans are exported immediately. Useful in tests. */
-export async function forceFlush() { await sdk.shutdown().catch(() => {}); sdk.start(); }
+export async function forceFlush() { await flushSpans(); }
 /** Flush spans without restarting — for use when you just need spans exported */
 export async function flushSpans() {
     const provider = trace.getTracerProvider() as any;

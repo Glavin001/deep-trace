@@ -1,6 +1,11 @@
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:latest
+    environment:
+      CLICKHOUSE_DB: otel
+      CLICKHOUSE_USER: otel
+      CLICKHOUSE_PASSWORD: otel
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -25,6 +30,8 @@ services:
       - "4318:4318"
     volumes:
       - ./otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       clickhouse:
         condition: service_healthy

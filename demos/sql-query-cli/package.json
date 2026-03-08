@@ -1,0 +1,9 @@
+{
+  "name": "demo-sql-query-cli",
+  "private": true,
+  "scripts": {
+    "recent": "node queries.mjs recent",
+    "services": "node queries.mjs services",
+    "trace": "node queries.mjs trace"
+  }
+}

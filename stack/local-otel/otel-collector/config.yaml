@@ -1,0 +1,45 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - http://localhost:3000
+            - http://127.0.0.1:3000
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+    spike_limit_mib: 32
+
+  batch:
+    timeout: 5s
+    send_batch_size: 1000
+    send_batch_max_size: 5000
+
+exporters:
+  clickhouse:
+    endpoint: tcp://host.docker.internal:9000?dial_timeout=10s&compress=lz4&username=otel&password=otel
+    database: otel
+    traces_table_name: otel_traces
+    create_schema: true
+    ttl: 72h
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse, debug]
