@@ -7,6 +7,7 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "npx playwright test",
+    "test:e2e:ab": "node e2e/agent-browser-e2e.mjs",
     "build": "tsc --noEmit",
     "stack:up": "bash scripts/prepare-grafana-clickhouse-plugin.sh && docker compose -f stack/local-otel/compose.yaml up -d",
     "stack:seed": "node scripts/seed-traces.js",
