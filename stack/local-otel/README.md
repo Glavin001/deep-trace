@@ -34,7 +34,7 @@ npm run stack:down
 ```bash
 docker compose -f stack/local-otel/compose.yaml ps
 curl http://localhost:8123/ping
-curl "http://localhost:8123/" --data-binary "SHOW TABLES FROM otel"
+curl -u otel:otel "http://localhost:8123/" --data-binary "SHOW TABLES FROM otel"
 ```
 
 The collector creates `otel.otel_traces` automatically on first insert.
@@ -42,12 +42,36 @@ Grafana is available at `http://localhost:3002`.
 
 ## Grafana trace UI
 
-- Open `http://localhost:3002/explore`.
-- The provisioned `ClickHouse Traces` datasource is the default.
-- Use the traces query mode to search recent spans, then open a trace to see the waterfall view.
-- A starter dashboard is provisioned at `http://localhost:3002/d/deep-trace-overview/deep-trace-overview`.
-- The dashboard is just a convenience panel; Grafana Explore is the primary trace UI for waterfall inspection.
-- If an old Explore tab still shows `NaNd NaNh` after a datasource mapping change, open a brand-new Explore tab or session. A simple refresh can keep stale trace-detail query state.
+Open `http://localhost:3002/explore`. The provisioned `ClickHouse Traces` datasource is selected by default.
+
+### Step 1 — find a trace ID (Trace Search)
+
+Set the query panel to:
+
+- Query Type: **Traces**
+- Trace Mode: **Trace Search**
+
+Click **Run Query**. A table of recent root spans appears with columns `traceID`, `serviceName`, `operationName`, `startTime`, `duration`. Copy a `traceID` value.
+
+### Step 2 — inspect all spans (Trace ID)
+
+Switch the same panel (or open a split panel with the `Split` button) to:
+
+- Query Type: **Traces**
+- Trace Mode: **Trace ID**
+- Paste the trace ID into the **Trace ID** field
+
+Click **Run Query**. The full waterfall with all nested spans renders below, showing every span in the trace across services.
+
+> **Why two steps?** Trace Search filters to root spans only (Parent Span ID is empty), so child spans are intentionally excluded from that view. Trace ID mode fetches every span that shares the same trace ID.
+
+### Dashboard
+
+A starter table is provisioned at `http://localhost:3002/d/deep-trace-overview/deep-trace-overview`. It shows recent spans and respects the dashboard time picker. Grafana Explore (above) is the primary UI for waterfall inspection.
+
+### Caveats
+
+- If an Explore tab shows `NaNd NaNh` after a config change, open a fresh Explore tab — a simple refresh can keep stale query state.
 
 ## Query examples
 

@@ -34,11 +34,7 @@ Run the Next.js demo:
 
 ```bash
 npm run demo:next:install
-DEBUG_PROBE_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
-OTEL_SERVICE_NAME=next-fullstack-api \
-NEXT_PUBLIC_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
-NEXT_PUBLIC_OTEL_SERVICE_NAME=next-fullstack-web \
-npm run dev --prefix demos/next-fullstack
+npm run demo:next:dev
 ```
 
 Then open `http://127.0.0.1:3000`, emit a trace, inspect Grafana at `http://127.0.0.1:3002`, and query ClickHouse:

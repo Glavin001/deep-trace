@@ -69,7 +69,7 @@
               "queryType": "sql"
             }
           },
-          "query": "SELECT Timestamp AS timestamp, TraceId AS trace_id, ServiceName AS service_name, SpanName AS span_name, Duration / 1000000 AS duration_ms\\nFROM otel.otel_traces\\nWHERE Timestamp >= now() - INTERVAL 1 HOUR\\nORDER BY Timestamp DESC\\nLIMIT 50",
+          "query": "SELECT Timestamp AS timestamp, TraceId AS trace_id, ServiceName AS service_name, SpanName AS span_name, Duration / 1000000 AS duration_ms\\nFROM otel.otel_traces\\nWHERE Timestamp >= $__fromTime AND Timestamp <= $__toTime\\nORDER BY Timestamp DESC\\nLIMIT 50",
           "queryType": "sql",
           "refId": "A"
         }

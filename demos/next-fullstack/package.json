@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:local": "DEBUG_PROBE_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces OTEL_SERVICE_NAME=next-fullstack-api NEXT_PUBLIC_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces NEXT_PUBLIC_OTEL_SERVICE_NAME=next-fullstack-web next dev",
     "build": "next build",
     "start": "next start",
     "query:recent": "node scripts/query-clickhouse.mjs recent",

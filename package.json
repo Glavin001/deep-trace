@@ -5,12 +5,14 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "build": "tsc --noEmit",
     "stack:up": "bash scripts/prepare-grafana-clickhouse-plugin.sh && docker compose -f stack/local-otel/compose.yaml up -d",
+    "stack:seed": "node scripts/seed-traces.js",
     "stack:down": "docker compose -f stack/local-otel/compose.yaml down",
     "stack:logs": "docker compose -f stack/local-otel/compose.yaml logs --tail=50 clickhouse otel-collector",
     "demo:next:install": "npm install --prefix demos/next-fullstack",
-    "demo:next:dev": "npm run dev --prefix demos/next-fullstack",
+    "demo:next:dev": "npm run dev:local --prefix demos/next-fullstack",
     "demo:next:build": "npm run build --prefix demos/next-fullstack"
   },
   "dependencies": {
