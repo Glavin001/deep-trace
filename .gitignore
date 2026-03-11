@@ -5,3 +5,5 @@ dist/
 .local/
 .next/
 stack/local-otel/grafana/plugins/
+test-results/
+playwright-report/

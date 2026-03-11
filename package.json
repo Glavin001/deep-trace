@@ -6,6 +6,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:e2e": "npx playwright test",
     "build": "tsc --noEmit",
     "stack:up": "bash scripts/prepare-grafana-clickhouse-plugin.sh && docker compose -f stack/local-otel/compose.yaml up -d",
     "stack:seed": "node scripts/seed-traces.js",
@@ -30,6 +31,7 @@
   "devDependencies": {
     "@babel/core": "^7.26.0",
     "@babel/parser": "^7.26.0",
+    "@playwright/test": "^1.58.2",
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
