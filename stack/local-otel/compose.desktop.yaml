@@ -1,0 +1,11 @@
+# Optional override for Docker Desktop — adds ClickHouse ulimits for better performance.
+# Not used by default because ulimits fail in many sandbox/CI environments.
+#
+# Usage:
+#   docker compose -f stack/local-otel/compose.yaml -f stack/local-otel/compose.desktop.yaml up -d
+services:
+  clickhouse:
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
