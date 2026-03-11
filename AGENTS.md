@@ -1,6 +1,6 @@
 # AGENTS.md
 
-## Cursor Cloud specific instructions
+## Cursor Cloud / Claude Code specific instructions
 
 **deep-trace** is a local-only Node.js/TypeScript debugging/tracing library built on OpenTelemetry. It is a library, not a standalone application — there is no dev server to start.
 
@@ -12,7 +12,11 @@
 | Type check | `npm run build` (`tsc --noEmit`) |
 | Run tests | `npm test` (`vitest run`) |
 | Watch tests | `npm run test:watch` |
-| Start Docker in Cursor Cloud | `bash scripts/start-docker.sh` |
+| Start Docker (sandbox) | `bash scripts/start-docker.sh` |
+| Start stack | `npm run stack:up` |
+| Seed sample data | `npm run stack:seed` |
+| Stop stack | `npm run stack:down` |
+| Run Next.js demo | `npm run demo:next:install && npm run demo:next:dev` |
 
 ### Notes
 
@@ -23,32 +27,38 @@
 - The `punycode` deprecation warning from Node.js 22 is benign and comes from an OpenTelemetry transitive dependency; it does not affect functionality.
 - Docker is optional for the library tests, but required for the local collector/ClickHouse stack and demos.
 
-### Docker in Cursor Cloud
+### Docker in sandbox environments
 
-- Cursor Cloud sandboxes here do **not** use `systemd`, so Docker must be started manually.
-- Install and start Docker with:
+Sandbox environments (Cursor Cloud, Claude Code on the web, CI) often do **not** use `systemd`, so Docker must be started manually.
+
+1. Install and start Docker:
+
+   ```bash
+   bash scripts/start-docker.sh
+   export DOCKER_HOST=unix:///tmp/docker.sock
+   ```
+
+2. Verify Docker is working:
+
+   ```bash
+   docker ps
+   ```
+
+3. Start the stack:
+
+   ```bash
+   npm run stack:up
+   ```
+
+#### Sandbox-specific notes
+
+- The `start-docker.sh` script defaults to `--iptables=true` so containers can pull images. If your sandbox blocks iptables, set `DOCKER_IPTABLES=false` before running the script — but note that containers will not be able to reach the internet (you must pre-pull images).
+- The script uses `vfs` as the storage driver, which works in nested/unprivileged environments but uses more disk space.
+- After startup, all `docker` and `docker compose` commands must use the custom socket:
 
   ```bash
-  bash scripts/start-docker.sh
+  export DOCKER_HOST=unix:///tmp/docker.sock
+  docker compose -f stack/local-otel/compose.yaml up -d
   ```
 
-- The working daemon settings in this sandbox are:
-  - socket: `unix:///tmp/docker.sock`
-  - storage driver: `vfs`
-  - `--iptables=false`
-  - `--ip6tables=false`
-- After startup, use one of:
-
-  ```bash
-  export DOCKER_HOST=unix:///tmp/docker.sock && sudo -E docker ps
-  sg docker -c 'export DOCKER_HOST=unix:///tmp/docker.sock && docker ps'
-  ```
-
-- `docker compose` works through the same socket:
-
-  ```bash
-  export DOCKER_HOST=unix:///tmp/docker.sock && sudo -E docker compose version
-  export DOCKER_HOST=unix:///tmp/docker.sock && sudo -E docker compose -f stack/local-otel/compose.yaml up -d
-  ```
-
-- Do **not** rely on Compose `mem_limit` in this sandbox. Nested cgroup delegation here does not expose the memory controller, so container-level memory limits fail even though Docker itself works.
+- Do **not** rely on Compose `mem_limit` or container `ulimits` in sandboxes. Nested cgroup delegation may not expose the memory controller, and rlimit changes may be denied.

@@ -8,4 +8,4 @@ SELECT
 FROM otel.otel_traces
 WHERE ParentSpanId = ''
 ORDER BY Timestamp DESC
-LIMIT 25;
+LIMIT 25
