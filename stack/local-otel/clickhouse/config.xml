@@ -1,0 +1,22 @@
+<clickhouse>
+    <max_server_memory_usage_to_ram_ratio>0.5</max_server_memory_usage_to_ram_ratio>
+
+    <profiles>
+        <default>
+            <max_memory_usage>200000000</max_memory_usage>
+            <max_bytes_before_external_group_by>100000000</max_bytes_before_external_group_by>
+        </default>
+    </profiles>
+
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>
+    </merge_tree>
+
+    <max_connections>50</max_connections>
+    <listen_host>0.0.0.0</listen_host>
+
+    <logger>
+        <level>warning</level>
+        <console>true</console>
+    </logger>
+</clickhouse>

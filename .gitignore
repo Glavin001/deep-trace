@@ -2,3 +2,6 @@
 node_modules/
 dist/
 .debug/
+.local/
+.next/
+stack/local-otel/grafana/plugins/
