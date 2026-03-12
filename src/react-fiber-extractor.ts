@@ -261,7 +261,7 @@ export function extractComponentInfo(element: Element): FiberComponentInfo | und
         if (!fiber) return undefined;
 
         // Walk to nearest composite (user) component
-        let componentFiber = fiber;
+        let componentFiber: typeof fiber | null = fiber;
         if (!bippyCore.isCompositeFiber(componentFiber)) {
             componentFiber = componentFiber.return;
             while (componentFiber) {
