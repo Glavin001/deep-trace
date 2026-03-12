@@ -11,4 +11,4 @@ SELECT
     SpanAttributes
 FROM otel.otel_traces
 WHERE TraceId = '{trace_id}'
-ORDER BY Timestamp ASC;
+ORDER BY Timestamp ASC

@@ -1,7 +1,5 @@
 # AGENTS.md
 
-## Cursor Cloud specific instructions
-
 **deep-trace** is a local-only Node.js/TypeScript debugging/tracing library built on OpenTelemetry. It is a library, not a standalone application — there is no dev server to start.
 
 ### Quick reference
@@ -12,7 +10,11 @@
 | Type check | `npm run build` (`tsc --noEmit`) |
 | Run tests | `npm test` (`vitest run`) |
 | Watch tests | `npm run test:watch` |
-| Start Docker in Cursor Cloud | `bash scripts/start-docker.sh` |
+| Start Docker (sandbox) | `bash scripts/start-docker.sh` |
+| Start stack | `npm run stack:up` |
+| Seed sample data | `npm run stack:seed` |
+| Stop stack | `npm run stack:down` |
+| Run Next.js demo | `npm run demo:next:install && npm run demo:next:dev` |
 
 ### Notes
 
@@ -23,32 +25,93 @@
 - The `punycode` deprecation warning from Node.js 22 is benign and comes from an OpenTelemetry transitive dependency; it does not affect functionality.
 - Docker is optional for the library tests, but required for the local collector/ClickHouse stack and demos.
 
-### Docker in Cursor Cloud
+---
 
-- Cursor Cloud sandboxes here do **not** use `systemd`, so Docker must be started manually.
-- Install and start Docker with:
+## Cursor Cloud Agents
 
-  ```bash
-  bash scripts/start-docker.sh
-  ```
+Cursor Cloud sandboxes do **not** use `systemd`, so Docker must be started manually.
 
-- The working daemon settings in this sandbox are:
-  - socket: `unix:///tmp/docker.sock`
-  - storage driver: `vfs`
-  - `--iptables=false`
-  - `--ip6tables=false`
-- After startup, use one of:
+### Docker setup
+
+```bash
+DOCKER_IPTABLES=false bash scripts/start-docker.sh
+export DOCKER_HOST=unix:///tmp/docker.sock
+```
+
+**Important:** Cursor Cloud requires `--iptables=false` and `--ip6tables=false`. The script respects `DOCKER_IPTABLES=false` for this. With iptables disabled, containers cannot pull images from the internet — images must already be cached or pre-pulled.
+
+### Start the stack
+
+```bash
+npm run stack:up
+```
+
+If the ClickHouse container fails with an rlimit error, use the Cursor Cloud compose override which removes `ulimits`:
+
+```bash
+docker compose -f stack/local-otel/compose.yaml -f stack/local-otel/compose.cursor.yaml up -d
+```
+
+### Verify
+
+```bash
+sudo -E docker ps
+curl http://localhost:8123/ping
+```
+
+### Cursor Cloud-specific caveats
+
+- socket: `unix:///tmp/docker.sock`
+- storage driver: `vfs`
+- `--iptables=false` / `--ip6tables=false` (required)
+- Do **not** rely on Compose `mem_limit`. Nested cgroup delegation does not expose the memory controller.
+- Container `ulimits` may fail — use `compose.cursor.yaml` override if needed.
+- After startup, prefix commands with `sudo -E` or use `sg docker`:
 
   ```bash
   export DOCKER_HOST=unix:///tmp/docker.sock && sudo -E docker ps
   sg docker -c 'export DOCKER_HOST=unix:///tmp/docker.sock && docker ps'
   ```
 
-- `docker compose` works through the same socket:
+---
 
-  ```bash
-  export DOCKER_HOST=unix:///tmp/docker.sock && sudo -E docker compose version
-  export DOCKER_HOST=unix:///tmp/docker.sock && sudo -E docker compose -f stack/local-otel/compose.yaml up -d
-  ```
+## Claude Code Agents (web)
 
-- Do **not** rely on Compose `mem_limit` in this sandbox. Nested cgroup delegation here does not expose the memory controller, so container-level memory limits fail even though Docker itself works.
+Claude Code web sandboxes run as root and have internet access, but Docker must also be started manually.
+
+### Docker setup
+
+```bash
+bash scripts/start-docker.sh
+export DOCKER_HOST=unix:///tmp/docker.sock
+```
+
+The script defaults to `--iptables=true`, which allows containers to pull images normally.
+
+### Start the stack
+
+```bash
+npm run stack:up
+```
+
+### Verify
+
+```bash
+docker ps
+curl http://localhost:8123/ping
+```
+
+### Seed and run the demo
+
+```bash
+npm run stack:seed
+npm run demo:next:install
+npm run demo:next:dev
+```
+
+### Claude Code-specific caveats
+
+- `$USER` may be unset — the script handles this automatically.
+- Container `ulimits` are not supported (the default compose.yaml omits them).
+- iptables is enabled by default so `docker pull` works.
+- Running as root means `sudo` is a no-op, which is fine.

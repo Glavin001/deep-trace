@@ -23,6 +23,14 @@ Or directly:
 docker compose -f stack/local-otel/compose.yaml up -d
 ```
 
+On Docker Desktop you can add ClickHouse ulimits for better performance:
+
+```bash
+docker compose -f stack/local-otel/compose.yaml -f stack/local-otel/compose.desktop.yaml up -d
+```
+
+> **Note:** The base `compose.yaml` omits `ulimits` because they fail in many sandbox and CI environments. The `compose.desktop.yaml` override adds them back for local Docker Desktop usage.
+
 ## Stop
 
 ```bash

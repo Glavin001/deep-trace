@@ -7,4 +7,4 @@ SELECT
 FROM otel.otel_traces
 WHERE Timestamp >= now() - INTERVAL 1 HOUR
 GROUP BY ServiceName
-ORDER BY p99_duration_ms DESC;
+ORDER BY p99_duration_ms DESC

@@ -8,12 +8,16 @@ DOCKER_EXEC_ROOT="${DOCKER_EXEC_ROOT:-/tmp/dockerd-exec}"
 DOCKER_PIDFILE="${DOCKER_PIDFILE:-/tmp/dockerd.pid}"
 DOCKER_LOG="${DOCKER_LOG:-/tmp/dockerd.log}"
 
+# Fallback for environments where $USER is unset (e.g. containers running as root)
+: "${USER:=$(whoami)}"
+export USER
+
 if ! command -v docker >/dev/null 2>&1; then
   sudo apt-get update
   sudo apt-get install -y docker.io docker-compose-v2
 fi
 
-if ! getent group docker | rg -q "(^|:)[^:]*:[^:]*:.*\\b${USER}\\b"; then
+if ! getent group docker | grep -qE "(^|:)${USER}(,|$)"; then
   sudo usermod -aG docker "${USER}"
 fi
 
@@ -27,14 +31,20 @@ fi
 
 sudo mkdir -p "${DOCKER_DATA_ROOT}" "${DOCKER_EXEC_ROOT}"
 
+DOCKER_IPTABLES="${DOCKER_IPTABLES:-true}"
+
+IPTABLES_FLAGS=()
+if [ "${DOCKER_IPTABLES}" = "false" ]; then
+  IPTABLES_FLAGS+=(--iptables=false --ip6tables=false)
+fi
+
 sudo nohup dockerd \
   --host="${DOCKER_SOCKET}" \
   --data-root="${DOCKER_DATA_ROOT}" \
   --exec-root="${DOCKER_EXEC_ROOT}" \
   --pidfile="${DOCKER_PIDFILE}" \
   --storage-driver=vfs \
-  --iptables=false \
-  --ip6tables=false \
+  "${IPTABLES_FLAGS[@]}" \
   > "${DOCKER_LOG}" 2>&1 &
 
 for _ in $(seq 1 40); do
