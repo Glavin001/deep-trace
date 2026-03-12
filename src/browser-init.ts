@@ -123,7 +123,15 @@ function patchGlobalFetch(): void {
         }
 
         try {
-            const headers = new Headers(init?.headers);
+            // Merge headers from both Request object and init to avoid dropping any
+            const existingHeaders = input instanceof Request ? input.headers : undefined;
+            const headers = new Headers(init?.headers ?? existingHeaders);
+            // If init.headers was provided AND input is a Request, merge both
+            if (init?.headers && existingHeaders) {
+                existingHeaders.forEach((value, key) => {
+                    if (!headers.has(key)) headers.set(key, value);
+                });
+            }
             propagation.inject(context.active(), headers, {
                 set(carrier, key, value) {
                     carrier.set(key, value);

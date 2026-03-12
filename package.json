@@ -2,10 +2,37 @@
   "name": "deep-trace",
   "version": "0.1.0",
   "description": "Deeply analyze the runtime context of your local apps in development with enhanced OpenTelemetry (OTel)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser-init.d.ts",
+      "default": "./dist/browser-init.js"
+    },
+    "./node": {
+      "types": "./dist/instrumentation.node.d.ts",
+      "default": "./dist/instrumentation.node.js"
+    },
+    "./instrumentation": {
+      "types": "./dist/instrumentation.d.ts",
+      "default": "./dist/instrumentation.js"
+    },
+    "./babel-plugin": "./src/babel-plugin-probe.js"
+  },
+  "files": [
+    "dist",
+    "src/babel-plugin-probe.js"
+  ],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "tsc --noEmit",
+    "build": "tsc",
+    "build:check": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
     "stack:up": "bash scripts/prepare-grafana-clickhouse-plugin.sh && docker compose -f stack/local-otel/compose.yaml up -d",
     "stack:down": "docker compose -f stack/local-otel/compose.yaml down",
     "stack:logs": "docker compose -f stack/local-otel/compose.yaml logs --tail=50 clickhouse otel-collector",
@@ -13,8 +40,25 @@
     "demo:next:dev": "npm run dev --prefix demos/next-fullstack",
     "demo:next:build": "npm run build --prefix demos/next-fullstack"
   },
-  "dependencies": {
+  "peerDependencies": {
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.0.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.200.0",
+    "@opentelemetry/resources": "^2.0.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.0",
+    "@opentelemetry/semantic-conventions": "^1.28.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/core": { "optional": true },
+    "@opentelemetry/exporter-trace-otlp-http": { "optional": true },
+    "@opentelemetry/resources": { "optional": true },
+    "@opentelemetry/sdk-trace-base": { "optional": true },
+    "@opentelemetry/semantic-conventions": { "optional": true }
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "optionalDependencies": {
     "@opentelemetry/auto-instrumentations-node": "^0.71.0",
     "@opentelemetry/core": "^2.6.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",

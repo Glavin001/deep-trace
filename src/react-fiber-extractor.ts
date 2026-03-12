@@ -34,6 +34,7 @@ interface PendingComponentSpan {
 
 const pendingComponentSpans: PendingComponentSpan[] = [];
 const PENDING_SPAN_TTL = 5000; // 5 seconds
+const PENDING_SPAN_MAX = 1000; // Hard cap to prevent unbounded growth
 
 /**
  * Register a component span for fiber enrichment. Called by probe-wrapper
@@ -42,8 +43,12 @@ const PENDING_SPAN_TTL = 5000; // 5 seconds
  * add hierarchy/source data from the fiber tree.
  */
 export function registerComponentSpan(span: Span, componentName: string): void {
+    // Enforce hard cap — drop oldest entries if at limit
+    if (pendingComponentSpans.length >= PENDING_SPAN_MAX) {
+        pendingComponentSpans.splice(0, Math.floor(PENDING_SPAN_MAX * 0.2));
+    }
     pendingComponentSpans.push({ span, componentName, timestamp: Date.now() });
-    // Cleanup old entries
+    // Cleanup expired entries
     const cutoff = Date.now() - PENDING_SPAN_TTL;
     while (pendingComponentSpans.length > 0 && pendingComponentSpans[0].timestamp < cutoff) {
         pendingComponentSpans.shift();
@@ -406,6 +411,10 @@ export function extractComponentInfo(element: Element): FiberComponentInfo | und
  */
 export function addFiberAttributesToSpan(span: Span, element: Element): void {
     try {
+        // Only extract and serialize fiber data when the span is actually recording.
+        // This avoids triggering getters/Proxy traps on component props when tracing is disabled.
+        if (!span.isRecording()) return;
+
         const info = extractComponentInfo(element);
         if (!info) return;
 

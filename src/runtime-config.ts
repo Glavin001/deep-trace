@@ -10,6 +10,8 @@ export interface RuntimeConfig {
     logFile: string;
     maxSpans: number;
     serverPort: number;
+    /** Host to bind the debug HTTP server to (default: '127.0.0.1'). */
+    serverHost: string;
     isDevelopment: boolean;
     serviceName: string;
     otlpHttpEndpoint?: string;
@@ -79,6 +81,7 @@ export function buildRuntimeConfig(env: NodeJS.ProcessEnv = process.env, cwd: st
         logFile: path.join(jsonlDir, 'probe.log'),
         maxSpans: parseInteger(env.DEBUG_PROBE_MAX_SPANS, 10000),
         serverPort: parseInteger(env.DEBUG_PROBE_PORT, 43210),
+        serverHost: env.DEBUG_PROBE_HOST || '127.0.0.1',
         isDevelopment: env.NODE_ENV === 'development',
         serviceName: env.OTEL_SERVICE_NAME || env.DEBUG_PROBE_SERVICE_NAME || 'deep-trace-node',
         otlpHttpEndpoint: normalizeOtlpHttpEndpoint(tracesEndpoint),

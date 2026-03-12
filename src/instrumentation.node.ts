@@ -645,9 +645,10 @@ function startServer() {
         }
     });
 
-    const server = app.listen(SERVER_PORT, () => {
+    const SERVER_HOST = runtimeConfig.serverHost;
+    const server = app.listen(SERVER_PORT, SERVER_HOST, () => {
         serverStarted = true;
-        log.info(`Debug probe HTTP server listening on port ${SERVER_PORT}`);
+        log.info(`Debug probe HTTP server listening on ${SERVER_HOST}:${SERVER_PORT}`);
     });
     server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
