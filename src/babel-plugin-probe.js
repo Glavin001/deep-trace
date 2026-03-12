@@ -5,7 +5,13 @@
  *   function foo(a, b) { ... }
  * Into:
  *   function _unwrapped_foo(a, b) { ... }
- *   const foo = wrapUserFunction(_unwrapped_foo, 'foo');
+ *   const foo = wrapUserFunction(_unwrapped_foo, 'foo', { filePath: "app/page.tsx", line: 1, column: 0, isComponent: false });
+ *
+ * Also handles React components (PascalCase) and arrow function expressions:
+ *   const MyComponent = (props) => <div />;
+ * Into:
+ *   const _unwrapped_MyComponent = (props) => <div />;
+ *   const MyComponent = wrapUserFunction(_unwrapped_MyComponent, 'MyComponent', { ..., isComponent: true });
  *
  * Adapted from https://github.com/Syncause/ts-agent-file (MIT License)
  */
@@ -39,12 +45,12 @@ const API_HANDLERS = new Set([
 ]);
 
 function shouldWrap(name, isExported) {
-    if (!name) return { wrap: false, isApiHandler: false };
-    if (name.startsWith('_unwrapped_')) return { wrap: false, isApiHandler: false };
-    if (EXCLUDE_FUNCTIONS.has(name)) return { wrap: false, isApiHandler: false };
-    if (API_HANDLERS.has(name) && isExported) return { wrap: true, isApiHandler: true };
-    if (/^[A-Z]/.test(name)) return { wrap: false, isApiHandler: false }; // React components
-    return { wrap: true, isApiHandler: false };
+    if (!name) return { wrap: false, isApiHandler: false, isComponent: false };
+    if (name.startsWith('_unwrapped_')) return { wrap: false, isApiHandler: false, isComponent: false };
+    if (EXCLUDE_FUNCTIONS.has(name)) return { wrap: false, isApiHandler: false, isComponent: false };
+    if (API_HANDLERS.has(name) && isExported) return { wrap: true, isApiHandler: true, isComponent: false };
+    if (/^[A-Z]/.test(name)) return { wrap: true, isApiHandler: false, isComponent: true };
+    return { wrap: true, isApiHandler: false, isComponent: false };
 }
 
 function matches(pattern, path) {
@@ -82,6 +88,29 @@ module.exports = function (api, options = {}) {
         if (exclude && hasMatch(exclude, normalized)) return false;
         if (include && include.length > 0 && !hasMatch(include, normalized)) return false;
         return true;
+    }
+
+    /**
+     * Build a source metadata AST object expression:
+     *   { filePath: "...", line: N, column: N, isComponent: bool }
+     *
+     * Line/column come from the Babel AST node.loc, which always reflects the
+     * ORIGINAL source positions (not transpiled output).
+     */
+    function buildMetadataObject(state, node, isComponent) {
+        const resourcePath = state.filename || (state.file && state.file.opts.filename);
+        const relPath = resourcePath
+            ? nodePath.relative(process.cwd(), resourcePath).replace(/\\/g, '/')
+            : 'unknown';
+
+        const props = [
+            t.objectProperty(t.identifier('filePath'), t.stringLiteral(relPath)),
+            t.objectProperty(t.identifier('line'), t.numericLiteral(node.loc?.start.line ?? 0)),
+            t.objectProperty(t.identifier('column'), t.numericLiteral(node.loc?.start.column ?? 0)),
+            t.objectProperty(t.identifier('isComponent'), t.booleanLiteral(isComponent)),
+        ];
+
+        return t.objectExpression(props);
     }
 
     return {
@@ -170,17 +199,19 @@ module.exports = function (api, options = {}) {
                 if (!name) return;
 
                 const isExported = state.exportedFunctions.has(name);
-                const { wrap, isApiHandler } = shouldWrap(name, isExported);
+                const { wrap, isApiHandler, isComponent } = shouldWrap(name, isExported);
                 if (!wrap) return;
 
                 const internalName = `_unwrapped_${name}`;
                 path.node.id.name = internalName;
 
+                const metadataObj = buildMetadataObject(state, path.node, isComponent);
+
                 const wrapperDeclarator = t.variableDeclarator(
                     t.identifier(name),
                     t.callExpression(
                         t.identifier('wrapUserFunction'),
-                        [t.identifier(internalName), t.stringLiteral(name)]
+                        [t.identifier(internalName), t.stringLiteral(name), metadataObj]
                     )
                 );
 
@@ -197,6 +228,51 @@ module.exports = function (api, options = {}) {
                     path.parentPath.replaceWithMultiple([path.node, wrapperNode]);
                 } else {
                     path.insertAfter(wrapperNode);
+                }
+
+                state.wrappedFunctions.push(name);
+            },
+            VariableDeclarator(path, state) {
+                if (state.skipProcessing) return;
+                const name = path.node.id?.name;
+                if (!name) return;
+
+                const init = path.node.init;
+                if (!init || (init.type !== 'ArrowFunctionExpression' && init.type !== 'FunctionExpression')) return;
+
+                const isExported = state.exportedFunctions.has(name);
+                const { wrap, isComponent } = shouldWrap(name, isExported);
+                if (!wrap) return;
+
+                // Rename: const _unwrapped_MyComponent = (props) => <div />;
+                const internalName = `_unwrapped_${name}`;
+                path.node.id.name = internalName;
+
+                const metadataObj = buildMetadataObject(state, init, isComponent);
+
+                const wrapperDeclarator = t.variableDeclarator(
+                    t.identifier(name),
+                    t.callExpression(
+                        t.identifier('wrapUserFunction'),
+                        [t.identifier(internalName), t.stringLiteral(name), metadataObj]
+                    )
+                );
+
+                // Insert the wrapper after the parent VariableDeclaration
+                const varDeclPath = path.parentPath; // VariableDeclaration
+
+                let wrapperNode;
+                if (isExported && varDeclPath.parent.type === 'ExportNamedDeclaration') {
+                    // export const MyComponent = () => ... → already in an export context
+                    // We need to: remove the export wrapper, emit the unwrapped decl, then emit export const wrapper
+                    wrapperNode = t.exportNamedDeclaration(t.variableDeclaration('const', [wrapperDeclarator]));
+                    varDeclPath.parentPath.replaceWithMultiple([varDeclPath.node, wrapperNode]);
+                } else if (isExported) {
+                    wrapperNode = t.exportNamedDeclaration(t.variableDeclaration('const', [wrapperDeclarator]));
+                    varDeclPath.insertAfter(wrapperNode);
+                } else {
+                    wrapperNode = t.variableDeclaration('const', [wrapperDeclarator]);
+                    varDeclPath.insertAfter(wrapperNode);
                 }
 
                 state.wrappedFunctions.push(name);

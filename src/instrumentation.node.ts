@@ -32,6 +32,8 @@ import * as fs from 'fs';
 import { inspect } from 'util';
 import express, { Request, Response } from 'express';
 import { buildRuntimeConfig, isInternalSpanRequest, RuntimeConfig } from './runtime-config';
+import type { SourceMetadata } from './types';
+import { getCallerLocation } from './v8-source-location';
 
 // ===== Configuration (env vars) =====
 const runtimeConfig = buildRuntimeConfig();
@@ -359,7 +361,7 @@ function toStr(v: any): string {
     }
 }
 
-function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'class_method' = 'user_function'): Function {
+function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'class_method' = 'user_function', metadata?: SourceMetadata): Function {
     if ((fn as any)[WRAPPED]) return fn;
     const wrapped = function (this: any, ...args: any[]) {
         const parentSpan = trace.getSpan(context.active());
@@ -375,6 +377,31 @@ function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'c
         span.setAttribute('function.args.count', args.length);
         if (callerName) span.setAttribute('function.caller.name', callerName);
         if (parentSpanId) span.setAttribute('function.caller.spanId', parentSpanId);
+
+        // Source location metadata (from Babel plugin or V8 stack traces)
+        if (metadata?.filePath) span.setAttribute('code.filepath', metadata.filePath);
+        if (metadata?.line) span.setAttribute('code.lineno', metadata.line);
+        if (metadata?.column !== undefined && metadata.column !== null) span.setAttribute('code.column', metadata.column);
+
+        // React component metadata
+        if (metadata?.isComponent) {
+            span.setAttribute('code.function.type', 'react_component');
+            span.setAttribute('component.name', spanName);
+            if (args.length > 0 && args[0] && typeof args[0] === 'object') {
+                try {
+                    const props = args[0];
+                    const serializable: Record<string, any> = {};
+                    for (const key of Object.keys(props)) {
+                        const val = props[key];
+                        if (key === 'children' || typeof val === 'function' || typeof val === 'symbol') continue;
+                        serializable[key] = val;
+                    }
+                    if (Object.keys(serializable).length > 0) {
+                        span.setAttribute('component.props', toStr(serializable));
+                    }
+                } catch { /* props serialization is best-effort */ }
+            }
+        }
 
         const maxArgs = Math.min(args.length, 10);
         for (let i = 0; i < maxArgs; i++) {
@@ -419,8 +446,17 @@ function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'c
 }
 
 /** Wrap a function for tracing. Use from user code or from the Babel plugin. */
-export function wrapUserFunction<T extends (...args: any[]) => any>(fn: T, name?: string): T {
-    return wrapFunction(fn, name || fn.name || 'anonymous', 'user_function') as T;
+export function wrapUserFunction<T extends (...args: any[]) => any>(fn: T, name?: string, metadata?: SourceMetadata): T {
+    // V8 stack trace fallback: capture source location at registration time (not invocation time)
+    if (!metadata && runtimeConfig.v8SourceEnabled) {
+        try {
+            const loc = getCallerLocation(2);
+            if (loc) {
+                metadata = { filePath: loc.filePath, line: loc.line, column: loc.column };
+            }
+        } catch { /* V8 source location is best-effort */ }
+    }
+    return wrapFunction(fn, name || fn.name || 'anonymous', 'user_function', metadata) as T;
 }
 
 /** Wrap all methods on an object */

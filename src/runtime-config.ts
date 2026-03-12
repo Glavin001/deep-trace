@@ -16,6 +16,8 @@ export interface RuntimeConfig {
     otlpHeaders: Record<string, string>;
     otlpTimeoutMillis: number;
     otlpConcurrencyLimit: number;
+    /** Whether to use V8 stack traces for source location fallback (default: true). */
+    v8SourceEnabled: boolean;
 }
 
 export interface SpanRequestAttributes {
@@ -83,6 +85,7 @@ export function buildRuntimeConfig(env: NodeJS.ProcessEnv = process.env, cwd: st
         otlpHeaders: parseHeaderList(env.DEBUG_PROBE_OTLP_HEADERS || env.OTEL_EXPORTER_OTLP_HEADERS),
         otlpTimeoutMillis: parseInteger(env.DEBUG_PROBE_OTLP_TIMEOUT_MS, 10000),
         otlpConcurrencyLimit: parseInteger(env.DEBUG_PROBE_OTLP_CONCURRENCY, 10),
+        v8SourceEnabled: env.DEBUG_PROBE_V8_SOURCE !== 'false',
     };
 }
 

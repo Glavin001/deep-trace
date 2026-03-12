@@ -331,4 +331,127 @@ describe('probe-wrapper', () => {
             expect(span.attributes['function.return.value']).toBe('42');
         });
     });
+
+    describe('source metadata', () => {
+        it('should set code.filepath attribute when metadata provided', async () => {
+            clearSpans();
+            function myFn() { return 1; }
+            const wrapped = wrapUserFunction(myFn, 'myFn', { filePath: 'src/app/page.tsx', line: 10, column: 4 });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.filepath']).toBe('src/app/page.tsx');
+        });
+
+        it('should set code.lineno and code.column attributes when metadata provided', async () => {
+            clearSpans();
+            function myFn() { return 1; }
+            const wrapped = wrapUserFunction(myFn, 'myFn', { filePath: 'test.ts', line: 42, column: 8 });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.lineno']).toBe(42);
+            expect(span.attributes['code.column']).toBe(8);
+        });
+
+        it('should set code.column to 0 when column is 0', async () => {
+            clearSpans();
+            function myFn() { return 1; }
+            const wrapped = wrapUserFunction(myFn, 'myFn', { filePath: 'test.ts', line: 1, column: 0 });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.column']).toBe(0);
+        });
+
+        it('should set code.function.type to react_component when isComponent is true', async () => {
+            clearSpans();
+            function MyComponent(props: any) { return props; }
+            const wrapped = wrapUserFunction(MyComponent, 'MyComponent', { filePath: 'test.tsx', line: 5, column: 0, isComponent: true });
+            wrapped({ title: 'Hello', count: 3 });
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.function.type']).toBe('react_component');
+            expect(span.attributes['component.name']).toBe('MyComponent');
+        });
+
+        it('should serialize component props excluding children and functions', async () => {
+            clearSpans();
+            function MyComponent(props: any) { return props; }
+            const wrapped = wrapUserFunction(MyComponent, 'MyComponent', { isComponent: true });
+            wrapped({
+                title: 'Hello',
+                count: 3,
+                children: '<div />',
+                onClick: () => {},
+                id: Symbol('test'),
+            });
+
+            await flush();
+            const span = lastSpan();
+            const propsStr = span.attributes['component.props'] as string;
+            expect(propsStr).toContain('title');
+            expect(propsStr).toContain('Hello');
+            expect(propsStr).toContain('count');
+            expect(propsStr).not.toContain('children');
+            expect(propsStr).not.toContain('onClick');
+            expect(propsStr).not.toContain('Symbol');
+        });
+
+        it('should not set component attributes when isComponent is false/undefined', async () => {
+            clearSpans();
+            function myFn() { return 1; }
+            const wrapped = wrapUserFunction(myFn, 'myFn', { filePath: 'test.ts', line: 1 });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.function.type']).toBeUndefined();
+            expect(span.attributes['component.name']).toBeUndefined();
+            expect(span.attributes['component.props']).toBeUndefined();
+        });
+
+        it('should work without metadata (backward compatible)', async () => {
+            clearSpans();
+            function plainFn() { return 'ok'; }
+            const wrapped = wrapUserFunction(plainFn, 'plainFn');
+            const result = wrapped();
+
+            expect(result).toBe('ok');
+            await flush();
+            const span = lastSpan();
+            expect(span.name).toBe('plainFn');
+            expect(span.attributes['function.name']).toBe('plainFn');
+            // No code.* attributes expected
+        });
+
+        it('should handle component with no props gracefully', async () => {
+            clearSpans();
+            function EmptyComponent() { return null; }
+            const wrapped = wrapUserFunction(EmptyComponent, 'EmptyComponent', { isComponent: true });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['component.name']).toBe('EmptyComponent');
+            expect(span.attributes['component.props']).toBeUndefined();
+        });
+
+        it('should handle component with only non-serializable props', async () => {
+            clearSpans();
+            function MyComponent(props: any) { return null; }
+            const wrapped = wrapUserFunction(MyComponent, 'MyComponent', { isComponent: true });
+            wrapped({ children: '<div />', onClick: () => {} });
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['component.name']).toBe('MyComponent');
+            // No serializable props → component.props should not be set
+            expect(span.attributes['component.props']).toBeUndefined();
+        });
+    });
 });

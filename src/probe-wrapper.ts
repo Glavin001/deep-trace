@@ -9,6 +9,7 @@
  */
 
 import { trace, context, SpanStatusCode } from '@opentelemetry/api';
+import type { SourceMetadata } from './types';
 
 const tracer = trace.getTracer('probe-wrapper');
 const WRAPPED = Symbol('probe_wrapped');
@@ -49,13 +50,38 @@ function toStr(val: any): string {
     }
 }
 
-function wrapFunction(fn: Function, spanName: string): Function {
+function wrapFunction(fn: Function, spanName: string, metadata?: SourceMetadata): Function {
     if ((fn as any)[WRAPPED]) return fn;
     const wrapped = function (this: any, ...args: any[]) {
         const span = tracer.startSpan(spanName);
         span.setAttribute('function.name', spanName);
         span.setAttribute('function.type', 'user_function');
         span.setAttribute('function.args.count', args.length);
+
+        // Source location metadata (from Babel plugin or V8 stack traces)
+        if (metadata?.filePath) span.setAttribute('code.filepath', metadata.filePath);
+        if (metadata?.line) span.setAttribute('code.lineno', metadata.line);
+        if (metadata?.column !== undefined && metadata.column !== null) span.setAttribute('code.column', metadata.column);
+
+        // React component metadata
+        if (metadata?.isComponent) {
+            span.setAttribute('code.function.type', 'react_component');
+            span.setAttribute('component.name', spanName);
+            if (args.length > 0 && args[0] && typeof args[0] === 'object') {
+                try {
+                    const props = args[0];
+                    const serializable: Record<string, any> = {};
+                    for (const key of Object.keys(props)) {
+                        const val = props[key];
+                        if (key === 'children' || typeof val === 'function' || typeof val === 'symbol') continue;
+                        serializable[key] = val;
+                    }
+                    if (Object.keys(serializable).length > 0) {
+                        span.setAttribute('component.props', toStr(serializable));
+                    }
+                } catch { /* props serialization is best-effort */ }
+            }
+        }
 
         const maxArgs = Math.min(args.length, 10);
         for (let i = 0; i < maxArgs; i++) {
@@ -96,8 +122,8 @@ function wrapFunction(fn: Function, spanName: string): Function {
 }
 
 /** Wrap a single function for tracing */
-export function wrapUserFunction<T extends (...args: any[]) => any>(fn: T, name?: string): T {
-    return wrapFunction(fn, name || fn.name || 'anonymous') as T;
+export function wrapUserFunction<T extends (...args: any[]) => any>(fn: T, name?: string, metadata?: SourceMetadata): T {
+    return wrapFunction(fn, name || fn.name || 'anonymous', metadata) as T;
 }
 
 /** Wrap all methods on an object */

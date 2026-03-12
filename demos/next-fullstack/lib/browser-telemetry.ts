@@ -6,6 +6,7 @@ import { resourceFromAttributes } from '@opentelemetry/resources';
 import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { WebTracerProvider } from '@opentelemetry/sdk-trace-web';
 import { SEMRESATTRS_DEPLOYMENT_ENVIRONMENT, SEMRESATTRS_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
+import { addFiberAttributesToSpan } from '../../../src/react-fiber-extractor';
 
 declare global {
   interface Window {
@@ -78,3 +79,29 @@ export async function withBrowserSpan<T>(
     }
   });
 }
+
+/**
+ * Create a browser span with React component fiber metadata attached.
+ * Uses bippy to extract component name, hierarchy, source location, and props
+ * from the React fiber tree and sets them as span attributes.
+ *
+ * @param name Span name
+ * @param element DOM element to extract React fiber info from
+ * @param attributes Additional span attributes
+ * @param execute Async function to execute within the span
+ */
+export async function withComponentSpan<T>(
+  name: string,
+  element: Element,
+  attributes: Record<string, string | number | boolean>,
+  execute: (span: Span) => Promise<T>,
+): Promise<T> {
+  return withBrowserSpan(name, attributes, async (span) => {
+    // Add React fiber component metadata to the span
+    addFiberAttributesToSpan(span, element);
+    return execute(span);
+  });
+}
+
+/** Re-export for direct use in components. */
+export { addFiberAttributesToSpan };
