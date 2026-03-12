@@ -22,6 +22,7 @@
     "@opentelemetry/sdk-node": "^0.213.0",
     "@opentelemetry/sdk-trace-base": "^2.6.0",
     "@opentelemetry/sdk-trace-node": "^2.6.0",
+    "@opentelemetry/sdk-trace-web": "^2.6.0",
     "@opentelemetry/semantic-conventions": "^1.40.0",
     "bippy": "^0.5.32",
     "express": "^4.21.2"

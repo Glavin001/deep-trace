@@ -11,6 +11,16 @@
 import { trace, context, SpanStatusCode } from '@opentelemetry/api';
 import type { SourceMetadata } from './types';
 
+// Lazy-load fiber extractor to avoid circular deps and Node.js-only environments
+let registerComponentSpanFn: ((span: any, name: string) => void) | null = null;
+const isBrowser = typeof window !== 'undefined';
+if (isBrowser) {
+    try {
+        const extractor = require('./react-fiber-extractor');
+        registerComponentSpanFn = extractor.registerComponentSpan;
+    } catch { /* not available */ }
+}
+
 const tracer = trace.getTracer('probe-wrapper');
 const WRAPPED = Symbol('probe_wrapped');
 
@@ -89,6 +99,11 @@ function wrapFunction(fn: Function, spanName: string, metadata?: SourceMetadata)
                             span.setAttribute('component.props', toStr(serializable));
                         }
                     } catch { /* props serialization is best-effort */ }
+                }
+                // Register for fiber enrichment (browser only)
+                // onCommitFiberRoot will add hierarchy and debug source after React commits
+                if (registerComponentSpanFn) {
+                    try { registerComponentSpanFn(span, spanName); } catch { /* best-effort */ }
                 }
             }
 

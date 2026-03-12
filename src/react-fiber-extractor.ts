@@ -22,6 +22,34 @@ try {
     // bippy not available — all functions will gracefully return undefined
 }
 
+// ===== Recent Span Registry =====
+// Tracks recently-created component spans so onCommitFiberRoot can enrich them
+// with fiber hierarchy data after React commits.
+
+interface PendingComponentSpan {
+    span: Span;
+    componentName: string;
+    timestamp: number;
+}
+
+const pendingComponentSpans: PendingComponentSpan[] = [];
+const PENDING_SPAN_TTL = 5000; // 5 seconds
+
+/**
+ * Register a component span for fiber enrichment. Called by probe-wrapper
+ * when wrapping a component (isComponent: true) in browser environments.
+ * The onCommitFiberRoot hook will match this span by component name and
+ * add hierarchy/source data from the fiber tree.
+ */
+export function registerComponentSpan(span: Span, componentName: string): void {
+    pendingComponentSpans.push({ span, componentName, timestamp: Date.now() });
+    // Cleanup old entries
+    const cutoff = Date.now() - PENDING_SPAN_TTL;
+    while (pendingComponentSpans.length > 0 && pendingComponentSpans[0].timestamp < cutoff) {
+        pendingComponentSpans.shift();
+    }
+}
+
 // ===== Component Name Filtering =====
 // Adapted from react-grab (MIT) — https://github.com/aidenybai/react-grab
 
@@ -106,7 +134,76 @@ export interface FiberComponentInfo {
 export function initReactInstrumentation(): void {
     try {
         if (!bippyCore) return;
-        bippyCore.instrument({ onCommitFiberRoot() {} });
+        const bippy = bippyCore;
+        bippyCore.instrument({
+            onCommitFiberRoot(_rendererID: number, root: any) {
+                // Enrich pending component spans with fiber hierarchy data.
+                // This runs after React commits, so the fiber tree is fully formed.
+                if (pendingComponentSpans.length === 0) return;
+
+                try {
+                    // Walk the committed fiber tree looking for components that match pending spans
+                    const current = root?.current;
+                    if (!current) return;
+
+                    // Collect all composite fibers in this commit
+                    const compositeFibers: Array<{ name: string; fiber: any }> = [];
+                    bippy.traverseFiber(current, (fiber: any) => {
+                        if (bippy.isCompositeFiber(fiber)) {
+                            const name = bippy.getDisplayName(fiber.type);
+                            if (name && isUsefulComponentName(name)) {
+                                compositeFibers.push({ name, fiber });
+                            }
+                        }
+                        return false; // continue traversal
+                    });
+
+                    // Match pending spans to fibers by component name
+                    const cutoff = Date.now() - PENDING_SPAN_TTL;
+                    const remaining: PendingComponentSpan[] = [];
+
+                    for (const pending of pendingComponentSpans) {
+                        if (pending.timestamp < cutoff) continue; // expired
+
+                        const match = compositeFibers.find(f => f.name === pending.componentName);
+                        if (match) {
+                            // Add hierarchy
+                            const hierarchy: string[] = [];
+                            let ancestor = match.fiber.return;
+                            while (ancestor) {
+                                if (bippy.isCompositeFiber(ancestor)) {
+                                    const ancestorName = bippy.getDisplayName(ancestor.type);
+                                    if (ancestorName && isUsefulComponentName(ancestorName)) {
+                                        hierarchy.push(ancestorName);
+                                    }
+                                }
+                                ancestor = ancestor.return;
+                            }
+                            if (hierarchy.length > 0) {
+                                pending.span.setAttribute('component.hierarchy', hierarchy.join(' > '));
+                            }
+
+                            // Add debug source if available
+                            const source = getDebugSource(match.fiber);
+                            if (source) {
+                                // Only set source from fiber if not already set by Babel
+                                // (Babel source is more accurate, fiber source is fallback)
+                                pending.span.setAttribute('component.fiber.source', source.fileName);
+                            }
+                            // Don't add to remaining — consumed
+                        } else {
+                            remaining.push(pending);
+                        }
+                    }
+
+                    // Replace pending list with unconsumed entries
+                    pendingComponentSpans.length = 0;
+                    pendingComponentSpans.push(...remaining);
+                } catch {
+                    // Fiber enrichment is best-effort — never crash React
+                }
+            },
+        });
     } catch {
         // No React present or bippy initialization failed — graceful degradation
     }

@@ -1,7 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { injectTraceHeaders, initBrowserTelemetry, withBrowserSpan } from '../lib/browser-telemetry';
+import { useMemo, useState } from 'react';
+
+/**
+ * Demo panel component — ZERO tracing imports.
+ *
+ * Tracing is handled automatically:
+ * - This component is auto-wrapped by the Babel plugin (PascalCase → isComponent: true)
+ * - The runDemo function is auto-wrapped by the Babel plugin (arrow function)
+ * - fetch() calls auto-inject traceparent headers (via browser-init.ts fetch patch)
+ * - No manual span creation, no manual header injection needed
+ */
 
 interface DemoResponse {
   term: string;
@@ -21,55 +30,33 @@ export function DemoPanel() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    initBrowserTelemetry();
-  }, []);
-
   const queryHint = useMemo(() => {
     if (!result?.traceId) return 'Run the demo to get a trace id.';
     return `TRACE_ID=${result.traceId} npm run query:trace`;
   }, [result?.traceId]);
 
-  async function runDemo() {
+  const runDemo = async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const payload = await withBrowserSpan(
-        'demo.ui.run_query',
-        {
-          'demo.surface': 'next-fullstack',
-          'demo.term': term,
-        },
-        async (span) => {
-          span.addEvent('ui.button.clicked');
+      const response = await fetch(`/api/demo?term=${encodeURIComponent(term)}`, {
+        cache: 'no-store',
+        headers: { 'x-demo-source': 'browser-button' },
+      });
 
-          const response = await fetch(`/api/demo?term=${encodeURIComponent(term)}`, {
-            cache: 'no-store',
-            headers: injectTraceHeaders({
-              'x-demo-source': 'browser-button',
-            }),
-          });
+      if (!response.ok) {
+        throw new Error(`Demo request failed with ${response.status}`);
+      }
 
-          span.setAttribute('http.response.status_code', response.status);
-          if (!response.ok) {
-            throw new Error(`Demo request failed with ${response.status}`);
-          }
-
-          const body = (await response.json()) as DemoResponse;
-          span.setAttribute('demo.backend.trace_id', body.traceId);
-          span.addEvent('ui.response.received');
-          return body;
-        },
-      );
-
-      setResult(payload);
+      const body = (await response.json()) as DemoResponse;
+      setResult(body);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : String(caughtError));
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   return (
     <section className="panel-card">
