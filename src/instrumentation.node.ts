@@ -363,6 +363,10 @@ function toStr(v: any): string {
 
 function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'class_method' = 'user_function', metadata?: SourceMetadata): Function {
     if ((fn as any)[WRAPPED]) return fn;
+
+    // Skip generators — wrapping breaks the generator/async-generator protocol
+    const ctorName = fn.constructor?.name;
+    if (ctorName === 'GeneratorFunction' || ctorName === 'AsyncGeneratorFunction') return fn;
     const wrapped = function (this: any, ...args: any[]) {
         const parentSpan = trace.getSpan(context.active());
         const parentSpanId = parentSpan?.spanContext()?.spanId;
@@ -372,40 +376,45 @@ function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'c
         const spanId = span.spanContext().spanId;
         recordSpanName(spanId, spanName);
 
-        span.setAttribute('function.name', spanName);
-        span.setAttribute('function.type', type);
-        span.setAttribute('function.args.count', args.length);
-        if (callerName) span.setAttribute('function.caller.name', callerName);
-        if (parentSpanId) span.setAttribute('function.caller.spanId', parentSpanId);
+        // Only serialize/set attributes when the span is actually recording.
+        // This avoids triggering side effects (getters, Proxy traps, .toJSON())
+        // on function arguments when tracing is disabled or sampled out.
+        if (span.isRecording()) {
+            span.setAttribute('function.name', spanName);
+            span.setAttribute('function.type', type);
+            span.setAttribute('function.args.count', args.length);
+            if (callerName) span.setAttribute('function.caller.name', callerName);
+            if (parentSpanId) span.setAttribute('function.caller.spanId', parentSpanId);
 
-        // Source location metadata (from Babel plugin or V8 stack traces)
-        if (metadata?.filePath) span.setAttribute('code.filepath', metadata.filePath);
-        if (metadata?.line) span.setAttribute('code.lineno', metadata.line);
-        if (metadata?.column !== undefined && metadata.column !== null) span.setAttribute('code.column', metadata.column);
+            // Source location metadata (from Babel plugin or V8 stack traces)
+            if (metadata?.filePath) span.setAttribute('code.filepath', metadata.filePath);
+            if (metadata?.line != null) span.setAttribute('code.lineno', metadata.line);
+            if (metadata?.column != null) span.setAttribute('code.column', metadata.column);
 
-        // React component metadata
-        if (metadata?.isComponent) {
-            span.setAttribute('code.function.type', 'react_component');
-            span.setAttribute('component.name', spanName);
-            if (args.length > 0 && args[0] && typeof args[0] === 'object') {
-                try {
-                    const props = args[0];
-                    const serializable: Record<string, any> = {};
-                    for (const key of Object.keys(props)) {
-                        const val = props[key];
-                        if (key === 'children' || typeof val === 'function' || typeof val === 'symbol') continue;
-                        serializable[key] = val;
-                    }
-                    if (Object.keys(serializable).length > 0) {
-                        span.setAttribute('component.props', toStr(serializable));
-                    }
-                } catch { /* props serialization is best-effort */ }
+            // React component metadata
+            if (metadata?.isComponent) {
+                span.setAttribute('code.function.type', 'react_component');
+                span.setAttribute('component.name', spanName);
+                if (args.length > 0 && args[0] && typeof args[0] === 'object') {
+                    try {
+                        const props = args[0];
+                        const serializable: Record<string, any> = {};
+                        for (const key of Object.keys(props)) {
+                            const val = props[key];
+                            if (key === 'children' || typeof val === 'function' || typeof val === 'symbol') continue;
+                            serializable[key] = val;
+                        }
+                        if (Object.keys(serializable).length > 0) {
+                            span.setAttribute('component.props', toStr(serializable));
+                        }
+                    } catch { /* props serialization is best-effort */ }
+                }
             }
-        }
 
-        const maxArgs = Math.min(args.length, 10);
-        for (let i = 0; i < maxArgs; i++) {
-            span.setAttribute(`function.args.${i}`, toStr(args[i]));
+            const maxArgs = Math.min(args.length, 10);
+            for (let i = 0; i < maxArgs; i++) {
+                span.setAttribute(`function.args.${i}`, toStr(args[i]));
+            }
         }
 
         const ctx = trace.setSpan(context.active(), span);
@@ -414,7 +423,7 @@ function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'c
             if (res && typeof res === 'object' && typeof res.then === 'function') {
                 return res
                     .then((val: any) => {
-                        span.setAttribute('function.return.value', toStr(val));
+                        if (span.isRecording()) span.setAttribute('function.return.value', toStr(val));
                         span.setStatus({ code: SpanStatusCode.OK });
                         span.end();
                         cleanupSpanName(spanId);
@@ -428,7 +437,7 @@ function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'c
                         throw err;
                     });
             }
-            span.setAttribute('function.return.value', toStr(res));
+            if (span.isRecording()) span.setAttribute('function.return.value', toStr(res));
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
             cleanupSpanName(spanId);
@@ -442,6 +451,23 @@ function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'c
         }
     };
     (wrapped as any)[WRAPPED] = true;
+
+    // Preserve fn.length (arity) and fn.name to avoid breaking frameworks
+    // that inspect these (e.g. Express checks fn.length to distinguish middleware from error handlers)
+    try {
+        Object.defineProperty(wrapped, 'length', { value: fn.length, configurable: true });
+        Object.defineProperty(wrapped, 'name', { value: fn.name || spanName, configurable: true });
+    } catch { /* best-effort */ }
+
+    // Copy custom properties (e.g. displayName, defaultProps) from original to wrapper
+    try {
+        const descriptors = Object.getOwnPropertyDescriptors(fn);
+        for (const key of Object.keys(descriptors)) {
+            if (key === 'length' || key === 'name' || key === 'prototype' || key === 'arguments' || key === 'caller') continue;
+            try { Object.defineProperty(wrapped, key, descriptors[key]); } catch { /* skip non-configurable */ }
+        }
+    } catch { /* best-effort */ }
+
     return wrapped;
 }
 

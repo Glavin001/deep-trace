@@ -13,6 +13,14 @@
  *   const _unwrapped_MyComponent = (props) => <div />;
  *   const MyComponent = wrapUserFunction(_unwrapped_MyComponent, 'MyComponent', { ..., isComponent: true });
  *
+ * SAFETY: Non-exported, non-component function declarations are NOT wrapped
+ * because wrapping converts a hoisted `function` to a non-hoisted `const`,
+ * breaking code that calls the function before its declaration. These functions
+ * get source metadata via V8 stack traces at runtime instead.
+ *
+ * Generator functions (function*) are also skipped — wrapping them would break
+ * the generator protocol since the wrapper is a plain function.
+ *
  * Adapted from https://github.com/Syncause/ts-agent-file (MIT License)
  */
 
@@ -198,9 +206,18 @@ module.exports = function (api, options = {}) {
                 const name = path.node.id?.name;
                 if (!name) return;
 
+                // Skip generators — wrapping breaks the generator protocol
+                if (path.node.generator || path.node.async && path.node.generator) return;
+
                 const isExported = state.exportedFunctions.has(name);
                 const { wrap, isApiHandler, isComponent } = shouldWrap(name, isExported);
                 if (!wrap) return;
+
+                // Skip non-exported, non-component function declarations to preserve hoisting.
+                // Wrapping converts hoisted `function foo(){}` to non-hoisted `const foo = wrap(...)`,
+                // which breaks code that calls foo() before its declaration.
+                // V8 stack traces provide source metadata for these at runtime.
+                if (!isExported && !isComponent && !isApiHandler) return;
 
                 const internalName = `_unwrapped_${name}`;
                 path.node.id.name = internalName;
@@ -239,6 +256,9 @@ module.exports = function (api, options = {}) {
 
                 const init = path.node.init;
                 if (!init || (init.type !== 'ArrowFunctionExpression' && init.type !== 'FunctionExpression')) return;
+
+                // Skip generator expressions — wrapping breaks the generator protocol
+                if (init.generator) return;
 
                 const isExported = state.exportedFunctions.has(name);
                 const { wrap, isComponent } = shouldWrap(name, isExported);

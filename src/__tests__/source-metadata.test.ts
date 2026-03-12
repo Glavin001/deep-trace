@@ -132,6 +132,23 @@ describe('source metadata (integration)', () => {
         expect(propsStr).not.toContain('Symbol');
     });
 
+    it('should set code.lineno to 0 when line is 0 (first line of file)', async () => {
+        function firstLineFn() { return 1; }
+        const wrapped = wrapUserFunction(firstLineFn, 'firstLineFn', {
+            filePath: 'src/index.ts',
+            line: 0,
+            column: 0,
+        });
+        wrapped();
+        await flush();
+
+        const spans = getSpans();
+        const span = spans.find(s => s.attributes['function.name'] === 'firstLineFn');
+        expect(span).toBeDefined();
+        expect(span!.attributes['code.lineno']).toBe(0);
+        expect(span!.attributes['code.column']).toBe(0);
+    });
+
     it('should preserve caller tracking with metadata', async () => {
         function outer() { return inner(); }
         function inner() { return 42; }

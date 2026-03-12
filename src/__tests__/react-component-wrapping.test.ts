@@ -61,10 +61,10 @@ function DemoPanel() { return <div>Demo</div>; }`;
         expect(output).toContain('isComponent: true');
     });
 
-    it('should wrap both components and regular functions in the same file', () => {
+    it('should wrap both components and exported functions in the same file', () => {
         const input = `
 function MyComponent() { return <div>{formatData()}</div>; }
-function formatData() { return 'data'; }
+export function formatData() { return 'data'; }
 `;
         const output = transform(input);
         expect(output).toContain('_unwrapped_MyComponent');
@@ -82,10 +82,10 @@ function formatData() { return 'data'; }
         expect(functionSection).toContain('isComponent: false');
     });
 
-    it('should wrap arrow component alongside regular functions', () => {
+    it('should wrap arrow component alongside arrow functions', () => {
         const input = `
 const Header = () => <header>Title</header>;
-function processData(items) { return items.map(i => i * 2); }
+const processData = (items) => items.map(i => i * 2);
 `;
         const output = transform(input);
         expect(output).toContain('_unwrapped_Header');
@@ -114,13 +114,13 @@ const myString = "hello";
     it('should still exclude React hooks even in component files', () => {
         const input = `
 function MyComponent() { return <div />; }
-function useCustomHook() { return useState(0); }
+const useCustomHook = () => useState(0);
 `;
-        // useCustomHook starts with lowercase 'u', not PascalCase, and it's not in EXCLUDE_FUNCTIONS
-        // So it will be wrapped (it's a regular function, not a React hook in EXCLUDE_FUNCTIONS)
+        // useCustomHook as arrow function is wrapped (no hoisting concern)
+        // MyComponent is PascalCase component — always wrapped
         const output = transform(input);
         expect(output).toContain('_unwrapped_MyComponent');
-        // useCustomHook is a regular camelCase function — it IS wrapped
+        // useCustomHook as arrow function IS wrapped (not in EXCLUDE_FUNCTIONS, just camelCase)
         expect(output).toContain('_unwrapped_useCustomHook');
     });
 
