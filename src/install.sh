@@ -1,15 +1,19 @@
 #!/bin/bash
-# install.sh — Install the local debug probe into a Node.js/TypeScript/Next.js project
+# install.sh — Install deep-trace into a Node.js/TypeScript/Next.js project
 #
 # Usage:
 #   cd your-project
-#   bash /path/to/install.sh
+#   bash /path/to/deep-trace/src/install.sh
 #
 # What it does:
 #   1. Detects project type (Next.js, TypeScript, JavaScript)
-#   2. Copies instrumentation files to the right location
-#   3. Installs OpenTelemetry + Express dependencies
-#   4. Configures tsconfig paths and package.json scripts
+#   2. Installs deep-trace and required peer dependencies
+#   3. Creates instrumentation hook files (zero-code pattern)
+#   4. Configures Babel plugin for auto-wrapping
+#
+# After installation, NO tracing imports are needed in your application code.
+# The Babel plugin auto-wraps functions/components, and framework hooks
+# handle initialization.
 #
 # Environment:
 #   DEBUG_PROBE_PORT=43210     — HTTP API port (default: 43210)
@@ -19,6 +23,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 echo_step() { echo -e "\033[1;34m==>\033[0m $1"; }
 echo_ok()   { echo -e "\033[1;32m OK:\033[0m $1"; }
@@ -60,19 +65,60 @@ else
 fi
 echo_step "Project type: $TYPE"
 
-# 3. Determine target directory
-TARGET="."
-[ -d "src" ] && TARGET="src"
-echo_step "Target: $TARGET/"
+# 3. Install deep-trace from local path
+echo_step "Installing deep-trace..."
+$INSTALL "${PROJECT_ROOT}"
 
-# 4. Copy files
-echo_step "Copying probe files..."
-cp "$SCRIPT_DIR/instrumentation.node.ts" "$TARGET/instrumentation.node.ts"
-cp "$SCRIPT_DIR/probe-wrapper.ts" "$TARGET/probe-wrapper.ts"
+# 4. Install required peer dependencies
+PEER_DEPS=(
+    "@opentelemetry/api"
+    "@opentelemetry/core"
+    "@opentelemetry/exporter-trace-otlp-http"
+    "@opentelemetry/resources"
+    "@opentelemetry/sdk-trace-base"
+    "@opentelemetry/semantic-conventions"
+)
+
+if [ "$TYPE" = "next" ] || [ "$TYPE" = "ts" ]; then
+    # Server-side deps
+    PEER_DEPS+=(
+        "@opentelemetry/sdk-node"
+        "@opentelemetry/sdk-trace-node"
+        "@opentelemetry/auto-instrumentations-node"
+        "express"
+    )
+fi
+
+echo_step "Installing OpenTelemetry peer dependencies..."
+$INSTALL "${PEER_DEPS[@]}"
 
 if [ "$TYPE" = "next" ]; then
-    cp "$SCRIPT_DIR/instrumentation.ts" "$TARGET/instrumentation.ts"
-    cp "$SCRIPT_DIR/babel-plugin-probe.js" "./babel-plugin-probe.js"
+    # Browser-side deps
+    echo_step "Installing browser tracing dependencies..."
+    $INSTALL "@opentelemetry/sdk-trace-web" "bippy"
+fi
+
+if [ "$TYPE" = "ts" ] || [ "$TYPE" = "next" ]; then
+    echo_step "Installing TypeScript dev dependencies..."
+    $DEV_INSTALL "@types/express" "@types/node"
+fi
+
+# 5. Create instrumentation hooks (zero-code pattern)
+if [ "$TYPE" = "next" ]; then
+    # Next.js: create instrumentation.ts and instrumentation-client.ts
+    if [ ! -f "instrumentation.ts" ]; then
+        cat > instrumentation.ts << 'HOOK'
+export { register } from 'deep-trace/instrumentation';
+HOOK
+        echo_ok "Created instrumentation.ts (server-side hook)"
+    fi
+
+    if [ ! -f "instrumentation-client.ts" ]; then
+        cat > instrumentation-client.ts << 'HOOK'
+import 'deep-trace/browser';
+HOOK
+        echo_ok "Created instrumentation-client.ts (client-side hook)"
+    fi
 
     # Create .babelrc if it doesn't exist
     if [ ! -f ".babelrc" ]; then
@@ -80,98 +126,46 @@ if [ "$TYPE" = "next" ]; then
 {
   "presets": ["next/babel"],
   "plugins": [
-    ["./babel-plugin-probe", {
-      "include": ["/app/"],
-      "exclude": ["/node_modules/", "/.next/", "/instrumentation/", "/probe-wrapper/", "/debug-probe/"]
+    ["deep-trace/babel-plugin", {
+      "include": ["/app/", "/components/"],
+      "exclude": ["/node_modules/", "/.next/"]
     }]
   ]
 }
 BABELRC
-        echo_ok "Created .babelrc"
+        echo_ok "Created .babelrc with deep-trace Babel plugin"
     fi
-fi
-
-# 5. Install dependencies
-CORE_DEPS=(
-    "@opentelemetry/sdk-node"
-    "@opentelemetry/api"
-    "@opentelemetry/auto-instrumentations-node"
-    "@opentelemetry/sdk-metrics"
-    "@opentelemetry/sdk-trace-node"
-    "@opentelemetry/core"
-    "express"
-    "ws"
-)
-
-echo_step "Installing core dependencies..."
-$INSTALL "${CORE_DEPS[@]}"
-
-if [ "$TYPE" = "ts" ] || [ "$TYPE" = "next" ]; then
-    echo_step "Installing TypeScript dependencies..."
-    $DEV_INSTALL "@types/express" "@types/ws" "@types/node" "tsx"
-fi
-
-if [ "$TYPE" = "next" ]; then
-    echo_step "Installing Babel dependencies..."
-    $DEV_INSTALL "@babel/parser" "@babel/traverse" "magic-string"
-fi
-
-# 6. Configure tsconfig paths
-if [ "$TYPE" = "ts" ] || [ "$TYPE" = "next" ]; then
-    if [ -f "tsconfig.json" ]; then
-        echo_step "Adding @/probe-wrapper path alias to tsconfig.json..."
-        node -e '
-        const fs = require("fs");
-        const target = "'$TARGET'";
-        const probeWrapper = target === "." ? "./probe-wrapper" : "./" + target + "/probe-wrapper";
-        const tsconfig = JSON.parse(fs.readFileSync("tsconfig.json", "utf8"));
-        if (!tsconfig.compilerOptions) tsconfig.compilerOptions = {};
-        if (!tsconfig.compilerOptions.baseUrl) tsconfig.compilerOptions.baseUrl = ".";
-        if (!tsconfig.compilerOptions.paths) tsconfig.compilerOptions.paths = {};
-        tsconfig.compilerOptions.paths["@/probe-wrapper"] = [probeWrapper];
-        fs.writeFileSync("tsconfig.json", JSON.stringify(tsconfig, null, 2));
-        console.log("  Added @/probe-wrapper ->", probeWrapper);
-        '
-    fi
-fi
-
-# 7. Update scripts
-echo_step "Updating package.json scripts..."
-node -e '
-const fs = require("fs");
-const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-const type = "'$TYPE'";
-const target = "'$TARGET'";
-const base = target === "." ? "./" : "./" + target + "/";
-
-if (type === "next") {
-    if (pkg.scripts?.dev && !pkg.scripts.dev.includes("--webpack")) {
-        pkg.scripts.dev = pkg.scripts.dev.replace("next dev", "next dev --webpack");
-    }
-    if (pkg.scripts?.build && !pkg.scripts.build.includes("--webpack")) {
-        pkg.scripts.build = pkg.scripts.build.replace("next build", "next build --webpack");
-    }
-} else if (type === "ts") {
+elif [ "$TYPE" = "ts" ]; then
+    # TypeScript: patch dev/start scripts to use --import
+    echo_step "Configuring --import for server-side instrumentation..."
+    node -e '
+    const fs = require("fs");
+    const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
     const keys = ["dev", "start", "serve"];
     let patched = false;
     for (const key of keys) {
         if (pkg.scripts?.[key] && !pkg.scripts[key].includes("--import")) {
             const cmd = pkg.scripts[key];
             if (cmd.startsWith("tsx ")) {
-                pkg.scripts[key] = cmd.replace(/^tsx\s+/, "tsx --import " + base + "instrumentation.node.ts ");
+                pkg.scripts[key] = cmd.replace(/^tsx\s+/, "tsx --import deep-trace/node ");
                 patched = true; break;
             } else if (cmd.startsWith("node ")) {
-                pkg.scripts[key] = cmd.replace(/^node\s+/, "node --import " + base + "instrumentation.node.ts ");
+                pkg.scripts[key] = cmd.replace(/^node\s+/, "node --import deep-trace/node ");
                 patched = true; break;
             }
         }
     }
-}
+    if (patched) {
+        fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
+        console.log("  Patched script to use --import deep-trace/node");
+    } else {
+        console.log("  Could not auto-patch scripts. Add manually:");
+        console.log("    node --import deep-trace/node your-app.ts");
+    }
+    '
+fi
 
-fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
-'
-
-# 8. Add .debug to .gitignore
+# 6. Add .debug to .gitignore
 if [ -f ".gitignore" ]; then
     if ! grep -q "^\.debug" .gitignore; then
         echo ".debug/" >> .gitignore
@@ -180,7 +174,20 @@ if [ -f ".gitignore" ]; then
 fi
 
 echo ""
-echo_ok "Debug probe installed!"
+echo_ok "deep-trace installed!"
+echo ""
+if [ "$TYPE" = "next" ]; then
+    echo "  Zero-code setup complete. No imports needed in your components or routes."
+    echo ""
+    echo "  Created files:"
+    echo "    - instrumentation.ts        (server-side OTel initialization)"
+    echo "    - instrumentation-client.ts  (browser-side: telemetry + bippy + fetch patching)"
+    echo "    - .babelrc                   (auto-wraps functions and components)"
+    echo ""
+fi
+echo "  Set these env vars before starting your app:"
+echo "    OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318"
+echo "    OTEL_SERVICE_NAME=my-app"
 echo ""
 echo "  Spans are written to:"
 echo "    - In-memory buffer (queryable at http://localhost:${DEBUG_PROBE_PORT:-43210}/remote-debug/spans)"
