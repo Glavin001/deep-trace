@@ -1,0 +1,9 @@
+{
+  "presets": ["next/babel"],
+  "plugins": [
+    ["../../src/babel-plugin-probe", {
+      "include": ["/app/", "/components/"],
+      "exclude": ["/node_modules/", "/.next/"]
+    }]
+  ]
+}

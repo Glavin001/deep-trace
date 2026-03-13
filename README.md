@@ -11,7 +11,77 @@ Zero-code OpenTelemetry instrumentation for JavaScript and TypeScript applicatio
 - **Silent observer** — Preserves `fn.length`, `fn.name`, skips generators, no side effects when tracing is disabled
 - **Local debug server** — HTTP API for querying spans + JSONL file output
 
-## Quick Start (Next.js)
+## Prerequisites
+
+- **Node.js 22+** (check with `node --version`)
+- **Docker Desktop** (for the local OTel collector stack) — [Install for macOS](https://www.docker.com/products/docker-desktop/) or [Linux](https://docs.docker.com/engine/install/)
+
+## Quick Start — Run the Demo
+
+The fastest way to see deep-trace in action. Works on macOS and Linux.
+
+### 1. Clone and install
+
+```bash
+git clone <repo-url> deep-trace
+cd deep-trace
+npm ci
+npm run build
+```
+
+### 2. Start the local collector stack
+
+Requires Docker Desktop running.
+
+```bash
+npm run stack:up
+```
+
+This starts OTel Collector + ClickHouse + Grafana via Docker Compose.
+
+### 3. Install and run the Next.js demo
+
+```bash
+npm run demo:next:install
+```
+
+Then start the demo with all required env vars:
+
+```bash
+DEBUG_PROBE_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
+OTEL_SERVICE_NAME=next-fullstack-api \
+NEXT_PUBLIC_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
+NEXT_PUBLIC_OTEL_SERVICE_NAME=next-fullstack-web \
+npm run demo:next:dev
+```
+
+### 4. Use it
+
+1. Open http://127.0.0.1:3000
+2. Click "Emit frontend + backend trace"
+3. Open Grafana at http://127.0.0.1:3002 — go to Explore, select the ClickHouse datasource, and query `otel.otel_traces`
+4. Or query spans directly:
+
+```bash
+# Recent traces
+curl http://127.0.0.1:43210/remote-debug/traces
+
+# Span statistics
+curl http://127.0.0.1:43210/remote-debug/spans/stats
+
+# Spans by function name
+curl 'http://127.0.0.1:43210/remote-debug/spans?functionName=DemoPanel'
+```
+
+### 5. Stop
+
+```bash
+npm run stack:down
+```
+
+---
+
+## Add to Your Own Next.js Project
 
 ### 1. Install
 
@@ -21,32 +91,55 @@ npm install deep-trace
 
 ### 2. Add framework hooks (no source code changes)
 
-**`instrumentation.ts`** (server-side, auto-loaded by Next.js):
+**`instrumentation.ts`** (project root, auto-loaded by Next.js on the server):
 ```ts
 export { register } from 'deep-trace/instrumentation';
 ```
 
-**`instrumentation-client.ts`** (client-side, auto-loaded before React):
+**`instrumentation-client.ts`** (project root, auto-loaded before React):
 ```ts
 import 'deep-trace/browser';
 ```
 
 ### 3. Add Babel plugin
 
-**`babel.config.js`** or **`next.config.ts`**:
-```js
-// In your Babel config:
-plugins: [['deep-trace/babel-plugin', { include: ['/app/', '/components/'] }]]
+Create **`.babelrc`** in your project root:
+```json
+{
+  "presets": ["next/babel"],
+  "plugins": [
+    ["deep-trace/babel-plugin", {
+      "include": ["/app/", "/components/"],
+      "exclude": ["/node_modules/", "/.next/"]
+    }]
+  ]
+}
 ```
 
 ### 4. Set environment variables
 
 ```bash
+# Server-side
 OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 OTEL_SERVICE_NAME=my-app
+
+# Browser-side (must be NEXT_PUBLIC_ prefixed)
+NEXT_PUBLIC_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces
+NEXT_PUBLIC_OTEL_SERVICE_NAME=my-app-web
 ```
 
 That's it. No imports in your components, no `wrapUserFunction()` calls, no manual span creation.
+
+### Or use the install script
+
+```bash
+cd your-project
+bash /path/to/deep-trace/src/install.sh
+```
+
+This auto-detects your project type, installs dependencies, creates hook files, and configures Babel.
+
+---
 
 ## How It Works
 
@@ -106,7 +199,8 @@ All configuration via environment variables:
 | Variable | Default | Description |
 |---|---|---|
 | `OTEL_SERVICE_NAME` | `deep-trace-node` | Service name in traces |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP collector URL |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP collector URL (base, no path) |
+| `DEBUG_PROBE_OTLP_ENDPOINT` | — | OTLP traces endpoint (with `/v1/traces` path) |
 | `DEBUG_PROBE_PORT` | `43210` | Local debug HTTP API port (0 to disable) |
 | `DEBUG_PROBE_HOST` | `127.0.0.1` | Debug HTTP API bind address |
 | `DEBUG_PROBE_JSONL` | `true` | Write spans to `.debug/traces.jsonl` |
@@ -114,26 +208,14 @@ All configuration via environment variables:
 | `NEXT_PUBLIC_OTLP_HTTP_ENDPOINT` | `http://127.0.0.1:4318/v1/traces` | Browser OTLP endpoint |
 | `NEXT_PUBLIC_OTEL_SERVICE_NAME` | `deep-trace-web` | Browser service name |
 
-## Local Development
+## Developing deep-trace
 
 ```bash
 npm ci              # Install dependencies
 npm run build       # Compile TypeScript to dist/
-npm test            # Run 172 tests
+npm test            # Run 194 tests across 15 files
 npm run build:check # Type-check only (no emit)
 ```
-
-### Running the demo
-
-```bash
-npm run stack:up                    # Start OTel Collector + ClickHouse
-npm run demo:next:install           # Install demo dependencies
-OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 \
-OTEL_SERVICE_NAME=next-fullstack-api \
-npm run demo:next:dev               # Start Next.js demo
-```
-
-Open `http://127.0.0.1:3000`, emit a trace, inspect Grafana at `http://127.0.0.1:3002`.
 
 ## Project Structure
 
@@ -149,7 +231,7 @@ src/
   v8-source-location.ts     # V8 stack trace source location extraction
   runtime-config.ts         # Environment variable configuration
   types.ts                  # Shared TypeScript types
-  __tests__/                # 172 tests across 14 files
+  __tests__/                # 194 tests across 15 files
 demos/
   next-fullstack/           # Zero-code Next.js demo app
 stack/
