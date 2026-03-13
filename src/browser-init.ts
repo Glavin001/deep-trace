@@ -98,8 +98,15 @@ async function initBrowserTelemetry(): Promise<void> {
         provider.register();
         providerInitialized = true;
         window.__deepTraceInitialized = true;
-    } catch {
+
+        if (typeof console !== 'undefined') {
+            console.log(`[deep-trace] Browser telemetry initialized — exporting to ${config.otlpEndpoint}`);
+        }
+    } catch (err) {
         // OTel browser packages not available — tracing will be no-op
+        if (typeof console !== 'undefined') {
+            console.warn('[deep-trace] Browser telemetry init failed:', err);
+        }
     }
 }
 

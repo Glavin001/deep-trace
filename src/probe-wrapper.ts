@@ -15,10 +15,10 @@ import type { SourceMetadata } from './types';
 let registerComponentSpanFn: ((span: any, name: string) => void) | null = null;
 const isBrowser = typeof window !== 'undefined';
 if (isBrowser) {
-    try {
-        const extractor = require('./react-fiber-extractor');
-        registerComponentSpanFn = extractor.registerComponentSpan;
-    } catch { /* not available */ }
+    // Use dynamic import for browser bundler compatibility (webpack/turbopack)
+    import('./react-fiber-extractor')
+        .then((extractor) => { registerComponentSpanFn = extractor.registerComponentSpan; })
+        .catch(() => { /* not available */ });
 }
 
 const tracer = trace.getTracer('probe-wrapper');
