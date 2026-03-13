@@ -37,8 +37,8 @@
     "stack:down": "docker compose -f stack/local-otel/compose.yaml down",
     "stack:logs": "docker compose -f stack/local-otel/compose.yaml logs --tail=50 clickhouse otel-collector",
     "demo:next:install": "npm install --prefix demos/next-fullstack",
-    "demo:next:dev": "npm run dev --prefix demos/next-fullstack",
-    "demo:next:build": "npm run build --prefix demos/next-fullstack"
+    "demo:next:dev": "npm run dev:otel --prefix demos/next-fullstack",
+    "demo:next:build": "npm run build:otel --prefix demos/next-fullstack"
   },
   "peerDependencies": {
     "@opentelemetry/api": "^1.9.0",

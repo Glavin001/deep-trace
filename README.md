@@ -45,13 +45,9 @@ This starts OTel Collector + ClickHouse + Grafana via Docker Compose.
 npm run demo:next:install
 ```
 
-Then start the demo with all required env vars:
+Then start the demo:
 
 ```bash
-DEBUG_PROBE_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
-OTEL_SERVICE_NAME=next-fullstack-api \
-NEXT_PUBLIC_OTLP_HTTP_ENDPOINT=http://127.0.0.1:4318/v1/traces \
-NEXT_PUBLIC_OTEL_SERVICE_NAME=next-fullstack-web \
 npm run demo:next:dev
 ```
 
