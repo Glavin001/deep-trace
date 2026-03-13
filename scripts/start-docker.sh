@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Start a local Docker daemon. Used in CI/sandboxed environments.
+# On macOS with Docker Desktop, this script is not needed — just use Docker Desktop.
+
 DOCKER_SOCKET="${DOCKER_SOCKET:-unix:///tmp/docker.sock}"
 DOCKER_SOCKET_PATH="${DOCKER_SOCKET#unix://}"
 DOCKER_DATA_ROOT="${DOCKER_DATA_ROOT:-/tmp/dockerd-data}"
@@ -9,12 +12,24 @@ DOCKER_PIDFILE="${DOCKER_PIDFILE:-/tmp/dockerd.pid}"
 DOCKER_LOG="${DOCKER_LOG:-/tmp/dockerd.log}"
 
 if ! command -v docker >/dev/null 2>&1; then
-  sudo apt-get update
-  sudo apt-get install -y docker.io docker-compose-v2
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y docker.io docker-compose-v2
+  elif command -v brew >/dev/null 2>&1; then
+    echo "On macOS, install Docker Desktop from https://www.docker.com/products/docker-desktop/"
+    echo "Or: brew install --cask docker"
+    exit 1
+  else
+    echo "Error: docker not found. Please install Docker for your platform." >&2
+    exit 1
+  fi
 fi
 
-if ! getent group docker | rg -q "(^|:)[^:]*:[^:]*:.*\\b${USER}\\b"; then
-  sudo usermod -aG docker "${USER}"
+# Check if current user is in docker group (Linux only)
+if command -v getent >/dev/null 2>&1; then
+  if ! getent group docker | grep -q "\b${USER}\b"; then
+    sudo usermod -aG docker "${USER}"
+  fi
 fi
 
 if sudo test -S "${DOCKER_SOCKET_PATH}"; then

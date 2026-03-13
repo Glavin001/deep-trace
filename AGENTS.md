@@ -9,7 +9,7 @@
 | Action | Command |
 |---|---|
 | Install deps | `npm ci` |
-| Type check | `npm run build` (`tsc --noEmit`) |
+| Type check | `npm run build:check` (`tsc --noEmit`) |
 | Run tests | `npm test` (`vitest run`) |
 | Watch tests | `npm run test:watch` |
 | Start Docker in Cursor Cloud | `bash scripts/start-docker.sh` |
@@ -18,7 +18,7 @@
 
 - **Node.js 22** is required (matches CI and `@types/node` version).
 - Tests use **Vitest** with `pool: 'forks'` for OTel global provider isolation. Each test file runs in its own forked process — this is intentional, not a misconfiguration.
-- `npm run build` only type-checks (`tsc --noEmit`); there is no compiled output. Vitest handles TS transpilation internally.
+- `npm run build` compiles TypeScript to `dist/` with declarations. `npm run build:check` runs type-checks only (`tsc --noEmit`). Vitest handles TS transpilation internally for tests.
 - The embedded Express HTTP API (port 43210) auto-starts when `instrumentation.node.ts` is imported. Tests that exercise HTTP endpoints start/stop this server within the test process — no manual server startup needed.
 - The `punycode` deprecation warning from Node.js 22 is benign and comes from an OpenTelemetry transitive dependency; it does not affect functionality.
 - Docker is optional for the library tests, but required for the local collector/ClickHouse stack and demos.
