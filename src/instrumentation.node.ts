@@ -27,6 +27,7 @@ import {
 } from '@opentelemetry/sdk-trace-base';
 import { ExportResultCode } from '@opentelemetry/core';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
+import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { trace, context, SpanStatusCode } from '@opentelemetry/api';
 import * as fs from 'fs';
 import { inspect } from 'util';
@@ -684,7 +685,12 @@ export function createSdk(config: RuntimeConfig = runtimeConfig): NodeSDK {
     return new NodeSDK({
         serviceName: config.serviceName,
         spanProcessors: createSpanProcessors(config),
-        instrumentations: config.isDevelopment ? [] : [getNodeAutoInstrumentations()],
+        // In dev mode, only enable HTTP instrumentation for trace context propagation
+        // (extracts W3C traceparent from incoming requests so server spans join browser traces).
+        // In production, enable all auto-instrumentations for full observability.
+        instrumentations: config.isDevelopment
+            ? [new HttpInstrumentation()]
+            : [getNodeAutoInstrumentations()],
     });
 }
 
