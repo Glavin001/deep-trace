@@ -83,7 +83,7 @@ module.exports = function (api, options = {}) {
         include = ['/app/'],
         exclude = ['/node_modules/', '/.next/', '/instrumentation/', '/probe-wrapper/', '/debug-probe/'],
         // Where to import wrapUserFunction from. Adjust for your project.
-        importPath = '@/probe-wrapper',
+        importPath = 'deep-trace',
     } = options;
 
     const finalIsServer = options.isServer !== undefined ? options.isServer : isServer;
@@ -179,7 +179,19 @@ module.exports = function (api, options = {}) {
                     });
 
                     if (!hasImport) {
-                        const actualImportPath = options.importPath || importPath;
+                        let actualImportPath = options.importPath || importPath;
+                        // If importPath is relative and resolveFromRoot is set,
+                        // resolve it relative to cwd then compute the correct
+                        // relative path from each file's directory
+                        if (options.resolveFromRoot && (actualImportPath.startsWith('.') || nodePath.isAbsolute(actualImportPath))) {
+                            const absoluteTarget = nodePath.resolve(process.cwd(), actualImportPath);
+                            const fileDir = nodePath.dirname(state.filename || '');
+                            if (fileDir) {
+                                let rel = nodePath.relative(fileDir, absoluteTarget).replace(/\\/g, '/');
+                                if (!rel.startsWith('.')) rel = './' + rel;
+                                actualImportPath = rel;
+                            }
+                        }
                         const importDecl = t.importDeclaration(
                             [t.importSpecifier(t.identifier('wrapUserFunction'), t.identifier('wrapUserFunction'))],
                             t.stringLiteral(actualImportPath)
