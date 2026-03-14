@@ -16,6 +16,10 @@
  *   8. Auth token propagation failure across service boundary
  *   9. Error in React render causing blank page
  *  10. Regression detection via trace comparison
+ *  13. Unexplained time gaps (uninstrumented code)
+ *  14. Middleware execution order bug
+ *  15. Connection pool exhaustion under load
+ *  16. Message queue poison pill (bad message blocks consumer)
  */
 
 import { describe, it, expect } from 'vitest';
@@ -1289,5 +1293,388 @@ describe('Scenario 12: Value Transformation Bug Across Services', () => {
     const services = summary.requestPath.map(s => s.serviceName);
     expect(services).toContain('web-bff');
     expect(services).toContain('pricing-service');
+  });
+});
+
+// ─── Scenario 13: Unexplained Time Gaps ───────────────────────────────────────
+// "Request takes 2 seconds but all the spans sum to 200ms."
+// Answer: There's uninstrumented code between the DB query and the response
+// serialization — a PDF generation step that has no tracing.
+
+describe('Scenario 13: Unexplained Time Gap (Uninstrumented Code)', () => {
+  const base = Date.parse('2026-01-15T10:30:00Z');
+
+  const spans: RawSpan[] = [
+    makeSpan({
+      spanId: 'handler',
+      name: 'GET /api/report',
+      serviceName: 'report-service',
+      kind: 'SPAN_KIND_SERVER',
+      durationMs: 2000,
+      startTimeMs: base,
+      endTimeMs: base + 2000,
+      attributes: {
+        'http.method': 'GET',
+        'function.return.value': '{"reportId":"rpt-1","format":"pdf"}',
+        'code.filepath': 'routes/reports.ts',
+        'code.lineno': 10,
+      },
+    }),
+    makeSpan({
+      spanId: 'db-query',
+      parentSpanId: 'handler',
+      name: 'SELECT report_data',
+      serviceName: 'report-service',
+      durationMs: 80,
+      startTimeMs: base + 10,
+      endTimeMs: base + 90,
+      attributes: {
+        'db.system': 'postgresql',
+        'db.statement': 'SELECT * FROM report_data WHERE id = $1',
+        'code.filepath': 'services/report-repo.ts',
+        'code.lineno': 25,
+      },
+    }),
+    // Big gap here: t+90 to t+1900 — 1810ms of uninstrumented PDF generation
+    makeSpan({
+      spanId: 'serialize',
+      parentSpanId: 'handler',
+      name: 'serializeResponse',
+      serviceName: 'report-service',
+      durationMs: 50,
+      startTimeMs: base + 1900,
+      endTimeMs: base + 1950,
+      attributes: {
+        'function.name': 'serializeResponse',
+        'function.return.value': '{"bytes":524288}',
+        'code.filepath': 'services/serializer.ts',
+        'code.lineno': 5,
+      },
+    }),
+  ];
+
+  it('parent duration far exceeds sum of child durations', () => {
+    const parentSpan = spans.find(s => s.spanId === 'handler')!;
+    const children = spans.filter(s => s.parentSpanId === 'handler');
+    const childTotal = children.reduce((sum, s) => sum + s.durationMs, 0);
+
+    expect(parentSpan.durationMs).toBe(2000);
+    expect(childTotal).toBe(130); // 80 + 50
+    // 2000 - 130 = 1870ms unaccounted for
+    const gap = parentSpan.durationMs - childTotal;
+    expect(gap).toBeGreaterThan(1800);
+  });
+
+  it('timeline reveals the 1810ms gap between DB query end and serialization start', () => {
+    const dbEnd = spans.find(s => s.spanId === 'db-query')!.endTimeMs;
+    const serializeStart = spans.find(s => s.spanId === 'serialize')!.startTimeMs;
+
+    const gapMs = serializeStart - dbEnd;
+    expect(gapMs).toBe(1810);
+    // This 1810ms gap is where the uninstrumented PDF generation happens
+  });
+
+  it('suspiciousness is low but duration is anomalous', () => {
+    const graph = buildExecutionGraph(spans);
+    const summary = buildTraceSummary(spans, graph);
+
+    // Parent is >1s so gets slow span bonus
+    expect(summary.suspiciousnessScore).toBe(10);
+    expect(summary.errorCount).toBe(0);
+    // The signal here is the gap, not errors
+  });
+});
+
+// ─── Scenario 14: Middleware Execution Order Bug ──────────────────────────────
+// "Users can access admin endpoints without being logged in."
+// Answer: The auth middleware runs AFTER the handler, not before it.
+
+describe('Scenario 14: Middleware Execution Order Bug', () => {
+  const base = Date.parse('2026-01-15T10:30:00Z');
+
+  const spans: RawSpan[] = [
+    makeSpan({
+      spanId: 'request',
+      name: 'DELETE /api/admin/users/u-42',
+      serviceName: 'api-server',
+      kind: 'SPAN_KIND_SERVER',
+      durationMs: 60,
+      startTimeMs: base,
+      endTimeMs: base + 60,
+      attributes: {
+        'http.method': 'DELETE',
+        'http.status_code': 200,
+        'function.return.value': '{"deleted":true}',
+        'code.filepath': 'server.ts',
+        'code.lineno': 15,
+      },
+    }),
+    // The handler runs FIRST (the bug)
+    makeSpan({
+      spanId: 'handler',
+      parentSpanId: 'request',
+      name: 'deleteUser',
+      serviceName: 'api-server',
+      durationMs: 25,
+      startTimeMs: base + 5,
+      endTimeMs: base + 30,
+      attributes: {
+        'function.name': 'deleteUser',
+        'function.args.0': '"u-42"',
+        'function.return.value': '{"deleted":true}',
+        'code.filepath': 'handlers/admin.ts',
+        'code.lineno': 55,
+      },
+    }),
+    // Auth middleware runs AFTER (should be before!)
+    makeSpan({
+      spanId: 'auth-check',
+      parentSpanId: 'request',
+      name: 'authMiddleware',
+      serviceName: 'api-server',
+      durationMs: 10,
+      statusCode: 'STATUS_CODE_ERROR',
+      statusMessage: 'No auth token provided',
+      startTimeMs: base + 35,
+      endTimeMs: base + 45,
+      attributes: {
+        'function.name': 'requireAuth',
+        'function.return.value': '{"authenticated":false}',
+        'code.filepath': 'middleware/auth.ts',
+        'code.lineno': 8,
+      },
+      events: [{
+        name: 'exception',
+        attributes: {
+          'exception.type': 'AuthenticationError',
+          'exception.message': 'No authorization token in request',
+        },
+      }],
+    }),
+  ];
+
+  it('handler executed before auth middleware (wrong order)', () => {
+    const handler = spans.find(s => s.spanId === 'handler')!;
+    const auth = spans.find(s => s.spanId === 'auth-check')!;
+
+    // Handler started at t+5, auth started at t+35
+    expect(handler.startTimeMs).toBeLessThan(auth.startTimeMs);
+    // Handler COMPLETED before auth even started
+    expect(handler.endTimeMs).toBeLessThan(auth.startTimeMs);
+  });
+
+  it('handler returned success, auth failed — but deletion already happened', () => {
+    const values = extractValueSnapshots(spans);
+
+    const handlerReturn = values.find(v => v.spanId === 'handler' && v.boundary === 'exit');
+    expect(handlerReturn!.preview).toContain('"deleted":true');
+
+    const authReturn = values.find(v => v.spanId === 'auth-check' && v.boundary === 'exit');
+    expect(authReturn!.preview).toContain('"authenticated":false');
+  });
+
+  it('overall request still returns 200 despite auth failure', () => {
+    const requestAttrs = spans.find(s => s.spanId === 'request')!.attributes;
+    expect(requestAttrs['http.status_code']).toBe(200);
+
+    // Auth errored but response was already sent
+    const graph = buildExecutionGraph(spans);
+    const summary = buildTraceSummary(spans, graph);
+    expect(summary.errorCount).toBe(1);
+    expect(summary.exceptions[0].type).toBe('AuthenticationError');
+  });
+});
+
+// ─── Scenario 15: Connection Pool Exhaustion ──────────────────────────────────
+// "DB queries are timing out under load, but the database CPU is idle."
+// Answer: All pool connections are checked out; new queries wait for a free slot.
+
+describe('Scenario 15: Connection Pool Exhaustion', () => {
+  const base = Date.parse('2026-01-15T10:30:00Z');
+
+  // 5 long-running queries that hold connections, then a 6th that times out
+  const longQueries = Array.from({ length: 5 }, (_, i) => makeSpan({
+    spanId: `long-query-${i}`,
+    parentSpanId: 'handler',
+    name: 'SELECT * FROM analytics',
+    serviceName: 'report-service',
+    durationMs: 3000,
+    startTimeMs: base + 10,
+    endTimeMs: base + 3010,
+    attributes: {
+      'db.system': 'postgresql',
+      'db.statement': 'SELECT * FROM analytics WHERE date BETWEEN $1 AND $2',
+      'code.filepath': 'services/analytics.ts',
+      'code.lineno': 30,
+    },
+  }));
+
+  const spans: RawSpan[] = [
+    makeSpan({
+      spanId: 'handler',
+      name: 'GET /api/dashboard',
+      serviceName: 'report-service',
+      kind: 'SPAN_KIND_SERVER',
+      durationMs: 5100,
+      statusCode: 'STATUS_CODE_ERROR',
+      statusMessage: 'Connection pool timeout',
+      startTimeMs: base,
+      endTimeMs: base + 5100,
+      attributes: {
+        'http.method': 'GET',
+        'code.filepath': 'routes/dashboard.ts',
+        'code.lineno': 15,
+      },
+    }),
+    ...longQueries,
+    // The 6th query — waits 2 seconds for a connection then times out
+    makeSpan({
+      spanId: 'blocked-query',
+      parentSpanId: 'handler',
+      name: 'SELECT user_prefs',
+      serviceName: 'report-service',
+      durationMs: 2000,
+      statusCode: 'STATUS_CODE_ERROR',
+      statusMessage: 'Timed out waiting for connection from pool',
+      startTimeMs: base + 3050,
+      endTimeMs: base + 5050,
+      attributes: {
+        'db.system': 'postgresql',
+        'db.statement': 'SELECT * FROM user_prefs WHERE user_id = $1',
+        'code.filepath': 'services/prefs.ts',
+        'code.lineno': 12,
+      },
+      events: [{
+        name: 'exception',
+        attributes: {
+          'exception.type': 'ConnectionPoolTimeoutError',
+          'exception.message': 'Timed out after 2000ms waiting for available connection (pool size: 5, all checked out)',
+        },
+      }],
+    }),
+  ];
+
+  it('detects many concurrent DB queries from one handler', () => {
+    const graph = buildExecutionGraph(spans);
+    const dbNodes = graph.nodes.filter(n => n.type === 'db_query');
+    expect(dbNodes.length).toBe(5); // 5 long-running queries
+
+    // The blocked query is classified as 'exception' (exception takes priority over db_query)
+    const exceptionNodes = graph.nodes.filter(n => n.type === 'exception');
+    expect(exceptionNodes.length).toBe(1);
+    expect(exceptionNodes[0].name).toBe('SELECT user_prefs');
+
+    // All 6 DB spans still have query_issued edges from parent
+    const queryEdges = graph.edges.filter(e => e.type === 'query_issued');
+    expect(queryEdges.length).toBe(6);
+
+    const uniqueParents = new Set(queryEdges.map(e => e.sourceNodeId));
+    expect(uniqueParents.size).toBe(1);
+  });
+
+  it('blocked query started AFTER long queries occupied all connections', () => {
+    const blocked = spans.find(s => s.spanId === 'blocked-query')!;
+    const longQueryEnd = Math.max(...longQueries.map(s => s.endTimeMs));
+
+    // Blocked query started after the long queries were running
+    expect(blocked.startTimeMs).toBeGreaterThan(base + 3000);
+  });
+
+  it('exception message reveals pool exhaustion as root cause', () => {
+    const graph = buildExecutionGraph(spans);
+    const summary = buildTraceSummary(spans, graph);
+
+    const poolException = summary.exceptions.find(e =>
+      e.type === 'ConnectionPoolTimeoutError'
+    );
+    expect(poolException).toBeDefined();
+    expect(poolException!.message).toContain('pool size: 5');
+    expect(poolException!.message).toContain('all checked out');
+  });
+
+  it('high suspiciousness due to errors + exception + slow spans', () => {
+    const graph = buildExecutionGraph(spans);
+    const summary = buildTraceSummary(spans, graph);
+
+    // 2 error spans (handler + blocked-query) + 1 exception + 6 slow spans (all >1s)
+    // Errors: 2*30=60, Exception: 1*40=40, Slow: 6*10=60 → 160, capped at 100
+    expect(summary.suspiciousnessScore).toBe(100);
+  });
+});
+
+// ─── Scenario 16: Message Queue Poison Pill ───────────────────────────────────
+// "The email worker keeps crashing and restarting."
+// Answer: A malformed message causes an unhandled exception; the message is
+// re-queued and processed again in an infinite loop.
+
+describe('Scenario 16: Poison Pill Message in Queue', () => {
+  const base = Date.parse('2026-01-15T10:30:00Z');
+
+  // Same message processed 3 times, each time failing
+  const attempts = Array.from({ length: 3 }, (_, i) => makeSpan({
+    traceId: `trace-poison-${i}`,
+    spanId: `consume-${i}`,
+    name: 'consumeEmailEvent',
+    serviceName: 'email-worker',
+    durationMs: 15,
+    statusCode: 'STATUS_CODE_ERROR',
+    statusMessage: 'Invalid JSON in message body',
+    startTimeMs: base + i * 5000,
+    endTimeMs: base + i * 5000 + 15,
+    attributes: {
+      'messaging.system': 'rabbitmq',
+      'function.name': 'processEmail',
+      'function.args.0': '{"raw":"\\x00\\x01 corrupted payload"}',
+      'function.return.value': '{"error":"SyntaxError: Unexpected token"}',
+      'code.filepath': 'workers/email.ts',
+      'code.lineno': 22,
+    },
+    events: [{
+      name: 'exception',
+      attributes: {
+        'exception.type': 'SyntaxError',
+        'exception.message': 'Unexpected token \\x00 in JSON at position 0',
+        'exception.stacktrace': 'at JSON.parse (<anonymous>)\n  at processEmail (workers/email.ts:25)',
+      },
+    }],
+  }));
+
+  it('same error repeats across multiple trace runs', () => {
+    // Each attempt is a separate trace run
+    const runs = attempts.map(span => buildTraceRun([span]));
+
+    expect(runs.length).toBe(3);
+    for (const run of runs) {
+      expect(run.status).toBe('error');
+      expect(run.hasExceptions).toBe(true);
+    }
+  });
+
+  it('all attempts fail with the same exception type and message', () => {
+    for (const span of attempts) {
+      const graph = buildExecutionGraph([span]);
+      const summary = buildTraceSummary([span], graph);
+
+      expect(summary.exceptions.length).toBe(1);
+      expect(summary.exceptions[0].type).toBe('SyntaxError');
+      expect(summary.exceptions[0].message).toContain('Unexpected token');
+    }
+  });
+
+  it('value snapshots show the same corrupted payload each time', () => {
+    for (const span of attempts) {
+      const values = extractValueSnapshots([span]);
+      const arg = values.find(v => v.boundary === 'entry' && v.name === 'arg0');
+      expect(arg).toBeDefined();
+      expect(arg!.preview).toContain('corrupted payload');
+    }
+  });
+
+  it('comparing two attempts shows identical structure (same message re-delivered)', () => {
+    const result = compareTraces([attempts[0]], [attempts[1]]);
+    // Both traces have the same span name with the same error — no structural diff
+    const statusDiffs = result.divergences.filter(d => d.type === 'status_diff');
+    expect(statusDiffs.length).toBe(0);
+    // They're structurally identical — same failure repeated
   });
 });
