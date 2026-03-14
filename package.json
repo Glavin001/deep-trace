@@ -21,7 +21,14 @@
       "types": "./dist/instrumentation.d.ts",
       "default": "./dist/instrumentation.js"
     },
-    "./babel-plugin": "./src/babel-plugin-probe.js"
+    "./babel-plugin": "./src/babel-plugin-probe.js",
+    "./deeptrace": {
+      "types": "./dist/deeptrace/index.d.ts",
+      "default": "./dist/deeptrace/index.js"
+    }
+  },
+  "bin": {
+    "deeptrace": "./dist/deeptrace/cli.js"
   },
   "files": [
     "dist",
@@ -40,9 +47,13 @@
     "demo:next:install": "npm install --prefix demos/next-fullstack",
     "demo:next:dev": "npm run dev:otel --prefix demos/next-fullstack",
     "demo:next:build": "npm run build:otel --prefix demos/next-fullstack",
+    "demo:dt:install": "npm install --prefix demos/deeptrace-demo",
+    "demo:dt:run": "npx tsx demos/deeptrace-demo/demo.ts",
+    "demo:dt:agent": "npx tsx demos/deeptrace-demo/agent-demo.ts",
     "viewer:install": "npm install --prefix apps/trace-viewer",
     "viewer:dev": "npm run dev --prefix apps/trace-viewer",
-    "viewer:build": "npm run build --prefix apps/trace-viewer"
+    "viewer:build": "npm run build --prefix apps/trace-viewer",
+    "deeptrace": "npx tsx src/deeptrace/cli.ts"
   },
   "peerDependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -70,6 +81,7 @@
     }
   },
   "dependencies": {
+    "@clickhouse/client": "^1.18.2",
     "@opentelemetry/api": "^1.9.0"
   },
   "optionalDependencies": {

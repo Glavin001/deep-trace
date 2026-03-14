@@ -1,0 +1,23 @@
+{
+  "name": "deeptrace-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end demo of the DeepTrace runtime debugging platform",
+  "scripts": {
+    "demo": "tsx demo.ts",
+    "demo:query": "tsx query-demo.ts",
+    "demo:agent": "tsx agent-demo.ts"
+  },
+  "dependencies": {
+    "@clickhouse/client": "^1.8.1",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.6.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",
+    "@opentelemetry/resources": "^2.6.0",
+    "@opentelemetry/sdk-trace-base": "^2.6.0",
+    "@opentelemetry/sdk-trace-node": "^2.6.0",
+    "@opentelemetry/semantic-conventions": "^1.40.0",
+    "tsx": "^4.19.4"
+  }
+}
