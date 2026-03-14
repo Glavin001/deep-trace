@@ -97,9 +97,25 @@ function wrapFunction(fn: Function, spanName: string, metadata?: SourceMetadata)
     // Skip generators — wrapping breaks the generator/async-generator protocol
     const ctorName = fn.constructor?.name;
     if (ctorName === 'GeneratorFunction' || ctorName === 'AsyncGeneratorFunction') return fn;
+
+    // Capture the active context at wrap-time. In the browser, inner functions
+    // (like event handlers) are wrapped during a component render, inside the
+    // component span's context.with(). When the event handler fires later
+    // (with no active span), we fall back to this captured context so the
+    // handler becomes a child of the component that defined it.
+    const wrapTimeCtx = context.active();
+    const hasWrapTimeSpan = trace.getSpan(wrapTimeCtx) !== undefined;
+
     const wrapped = function (this: any, ...args: any[]) {
         // For HTTP handlers, extract trace context from request headers
-        const parentCtx = extractHttpTraceContext(args, metadata);
+        const httpCtx = extractHttpTraceContext(args, metadata);
+        // Use HTTP context if available; otherwise, if there's no active span
+        // at call-time, fall back to the wrap-time context (links event
+        // handlers to the component that created them).
+        const callCtx = context.active();
+        const parentCtx = metadata?.isHttpHandler ? httpCtx :
+            trace.getSpan(callCtx) ? callCtx :
+            hasWrapTimeSpan ? wrapTimeCtx : callCtx;
         const span = tracer.startSpan(spanName, undefined, parentCtx);
 
         // Only serialize/set attributes when the span is actually recording.

@@ -18,9 +18,9 @@ export default function HomePage() {
         <article className="info-card">
           <h2>What gets emitted</h2>
           <ul>
-            <li>A browser span for the button interaction.</li>
-            <li>An incoming HTTP server span in Next.js.</li>
-            <li>Enhanced child spans produced with `wrapUserFunction()`.</li>
+            <li>Browser spans: DemoPanel render, validateInput, buildSearchContext, processResults, mergeAndFormat.</li>
+            <li>Two API round trips: /api/analyze (6 server spans) and /api/enrich (5 server spans).</li>
+            <li>Full distributed trace with ~20 spans across browser and server, linked via W3C traceparent.</li>
           </ul>
         </article>
 
