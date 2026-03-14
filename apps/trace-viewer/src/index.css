@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  @apply bg-surface-0 text-gray-200 antialiased;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  margin: 0;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-surface-1;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-surface-3 rounded;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-600;
+}
+
+/* Custom utility classes */
+@layer components {
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+  .badge-ok {
+    @apply bg-emerald-900/40 text-accent-green;
+  }
+  .badge-error {
+    @apply bg-red-900/40 text-accent-red;
+  }
+  .badge-service {
+    @apply bg-blue-900/30 text-accent-blue;
+  }
+  .card {
+    @apply bg-surface-1 border border-surface-3 rounded-lg;
+  }
+  .input-base {
+    @apply bg-surface-2 border border-surface-3 rounded-lg px-3 py-2 text-sm text-gray-200
+           placeholder-gray-500 focus:outline-none focus:border-accent-blue focus:ring-1 focus:ring-accent-blue/30;
+  }
+}
