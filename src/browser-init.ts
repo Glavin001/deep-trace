@@ -134,6 +134,13 @@ function patchGlobalFetch(): void {
         try {
             // Determine the URL and method for the fetch span
             const url = input instanceof Request ? input.url : String(input);
+
+            // Skip span creation for OTel exporter's own requests to avoid infinite loop
+            // (export → fetch span → export → fetch span → ...)
+            if (url.includes('/v1/traces') || url.includes('/v1/metrics') || url.includes('/v1/logs')) {
+                return originalFetch.call(this, input, init);
+            }
+
             const method = (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
             // Parse out just the pathname for the span name
             let pathname: string;
