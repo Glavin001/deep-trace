@@ -8,7 +8,18 @@
  * Adapted from https://github.com/Syncause/ts-agent-file (MIT License)
  */
 
-import { trace, context, SpanStatusCode } from '@opentelemetry/api';
+import { trace, context, SpanStatusCode, propagation } from '@opentelemetry/api';
+import type { SourceMetadata } from './types';
+
+// Lazy-load fiber extractor to avoid circular deps and Node.js-only environments
+let registerComponentSpanFn: ((span: any, name: string) => void) | null = null;
+const isBrowser = typeof window !== 'undefined';
+if (isBrowser) {
+    // Use dynamic import for browser bundler compatibility (webpack/turbopack)
+    import('./react-fiber-extractor')
+        .then((extractor) => { registerComponentSpanFn = extractor.registerComponentSpan; })
+        .catch(() => { /* not available */ });
+}
 
 const tracer = trace.getTracer('probe-wrapper');
 const WRAPPED = Symbol('probe_wrapped');
@@ -49,26 +60,99 @@ function toStr(val: any): string {
     }
 }
 
-function wrapFunction(fn: Function, spanName: string): Function {
-    if ((fn as any)[WRAPPED]) return fn;
-    const wrapped = function (this: any, ...args: any[]) {
-        const span = tracer.startSpan(spanName);
-        span.setAttribute('function.name', spanName);
-        span.setAttribute('function.type', 'user_function');
-        span.setAttribute('function.args.count', args.length);
+/**
+ * For HTTP handlers (GET, POST, etc.), extract W3C trace context from the
+ * incoming Request headers so server spans join the browser's trace.
+ */
+function extractHttpTraceContext(args: any[], metadata?: SourceMetadata) {
+    if (!metadata?.isHttpHandler || args.length === 0) return context.active();
+    try {
+        const request = args[0];
+        if (!request || typeof request !== 'object') return context.active();
+        const headers = request.headers;
+        if (!headers) return context.active();
 
-        const maxArgs = Math.min(args.length, 10);
-        for (let i = 0; i < maxArgs; i++) {
-            span.setAttribute(`function.args.${i}`, toStr(args[i]));
+        // Support both Headers API (.get()) and plain object
+        const carrier: Record<string, string> = {};
+        if (typeof headers.get === 'function') {
+            const tp = headers.get('traceparent');
+            if (tp) carrier.traceparent = tp;
+            const ts = headers.get('tracestate');
+            if (ts) carrier.tracestate = ts;
+        } else if (typeof headers === 'object') {
+            if (headers.traceparent) carrier.traceparent = headers.traceparent;
+            if (headers.tracestate) carrier.tracestate = headers.tracestate;
         }
 
-        const ctx = trace.setSpan(context.active(), span);
+        if (!carrier.traceparent) return context.active();
+        return propagation.extract(context.active(), carrier);
+    } catch {
+        return context.active();
+    }
+}
+
+function wrapFunction(fn: Function, spanName: string, metadata?: SourceMetadata): Function {
+    if ((fn as any)[WRAPPED]) return fn;
+
+    // Skip generators — wrapping breaks the generator/async-generator protocol
+    const ctorName = fn.constructor?.name;
+    if (ctorName === 'GeneratorFunction' || ctorName === 'AsyncGeneratorFunction') return fn;
+    const wrapped = function (this: any, ...args: any[]) {
+        // For HTTP handlers, extract trace context from request headers
+        const parentCtx = extractHttpTraceContext(args, metadata);
+        const span = tracer.startSpan(spanName, undefined, parentCtx);
+
+        // Only serialize/set attributes when the span is actually recording.
+        // This avoids triggering side effects (getters, Proxy traps, .toJSON())
+        // on function arguments when tracing is disabled or sampled out.
+        if (span.isRecording()) {
+            span.setAttribute('function.name', spanName);
+            span.setAttribute('function.type', 'user_function');
+            span.setAttribute('function.args.count', args.length);
+
+            // Source location metadata (from Babel plugin or V8 stack traces)
+            if (metadata?.filePath) span.setAttribute('code.filepath', metadata.filePath);
+            if (metadata?.line != null) span.setAttribute('code.lineno', metadata.line);
+            if (metadata?.column != null) span.setAttribute('code.column', metadata.column);
+
+            // React component metadata
+            if (metadata?.isComponent) {
+                span.setAttribute('code.function.type', 'react_component');
+                span.setAttribute('component.name', spanName);
+                if (args.length > 0 && args[0] && typeof args[0] === 'object') {
+                    try {
+                        const props = args[0];
+                        const serializable: Record<string, any> = {};
+                        for (const key of Object.keys(props)) {
+                            const val = props[key];
+                            if (key === 'children' || typeof val === 'function' || typeof val === 'symbol') continue;
+                            serializable[key] = val;
+                        }
+                        if (Object.keys(serializable).length > 0) {
+                            span.setAttribute('component.props', toStr(serializable));
+                        }
+                    } catch { /* props serialization is best-effort */ }
+                }
+                // Register for fiber enrichment (browser only)
+                // onCommitFiberRoot will add hierarchy and debug source after React commits
+                if (registerComponentSpanFn) {
+                    try { registerComponentSpanFn(span, spanName); } catch { /* best-effort */ }
+                }
+            }
+
+            const maxArgs = Math.min(args.length, 10);
+            for (let i = 0; i < maxArgs; i++) {
+                span.setAttribute(`function.args.${i}`, toStr(args[i]));
+            }
+        }
+
+        const ctx = trace.setSpan(parentCtx, span);
         try {
             const res = context.with(ctx, () => fn.apply(this, args));
             if (isPromiseLike(res)) {
                 return res
                     .then((val) => {
-                        span.setAttribute('function.return.value', toStr(val));
+                        if (span.isRecording()) span.setAttribute('function.return.value', toStr(val));
                         span.setStatus({ code: SpanStatusCode.OK });
                         span.end();
                         return val;
@@ -80,7 +164,7 @@ function wrapFunction(fn: Function, spanName: string): Function {
                         throw err;
                     });
             }
-            span.setAttribute('function.return.value', toStr(res));
+            if (span.isRecording()) span.setAttribute('function.return.value', toStr(res));
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
             return res;
@@ -92,12 +176,29 @@ function wrapFunction(fn: Function, spanName: string): Function {
         }
     };
     (wrapped as any)[WRAPPED] = true;
+
+    // Preserve fn.length (arity) and fn.name to avoid breaking frameworks
+    // that inspect these (e.g. Express checks fn.length to distinguish middleware from error handlers)
+    try {
+        Object.defineProperty(wrapped, 'length', { value: fn.length, configurable: true });
+        Object.defineProperty(wrapped, 'name', { value: fn.name || spanName, configurable: true });
+    } catch { /* best-effort */ }
+
+    // Copy custom properties (e.g. displayName, defaultProps) from original to wrapper
+    try {
+        const descriptors = Object.getOwnPropertyDescriptors(fn);
+        for (const key of Object.keys(descriptors)) {
+            if (key === 'length' || key === 'name' || key === 'prototype' || key === 'arguments' || key === 'caller') continue;
+            try { Object.defineProperty(wrapped, key, descriptors[key]); } catch { /* skip non-configurable */ }
+        }
+    } catch { /* best-effort */ }
+
     return wrapped;
 }
 
 /** Wrap a single function for tracing */
-export function wrapUserFunction<T extends (...args: any[]) => any>(fn: T, name?: string): T {
-    return wrapFunction(fn, name || fn.name || 'anonymous') as T;
+export function wrapUserFunction<T extends (...args: any[]) => any>(fn: T, name?: string, metadata?: SourceMetadata): T {
+    return wrapFunction(fn, name || fn.name || 'anonymous', metadata) as T;
 }
 
 /** Wrap all methods on an object */

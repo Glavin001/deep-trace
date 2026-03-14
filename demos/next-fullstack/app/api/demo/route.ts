@@ -1,8 +1,16 @@
-import { SpanStatusCode, trace } from '@opentelemetry/api';
-import { NextRequest, NextResponse } from 'next/server';
-import { flushSpans, wrapUserFunction } from '../../../../../src/instrumentation.node';
+/**
+ * Demo API route — ZERO tracing imports.
+ *
+ * Tracing is handled automatically:
+ * - The exported GET handler is auto-wrapped by the Babel plugin
+ * - lookupRecommendation and buildNarrative are auto-wrapped as arrow functions
+ * - Server-side OTel SDK is initialized via instrumentation.ts (Next.js framework hook)
+ * - Span flushing happens automatically via BatchSpanProcessor
+ */
 
-const lookupRecommendation = wrapUserFunction(async function lookupRecommendation(term: string) {
+import { NextRequest, NextResponse } from 'next/server';
+
+const lookupRecommendation = async (term: string) => {
   await new Promise(resolve => setTimeout(resolve, 120));
 
   return {
@@ -10,56 +18,26 @@ const lookupRecommendation = wrapUserFunction(async function lookupRecommendatio
     source: 'mock-model-cache',
     tags: ['frontend', 'backend', 'clickhouse', term.replace(/\s+/g, '-')],
   };
-}, 'demo.lookupRecommendation');
+};
 
-const buildNarrative = wrapUserFunction(function buildNarrative(term: string, confidence: number) {
+const buildNarrative = (term: string, confidence: number) => {
   return `Tracing "${term}" now streams browser and server spans into the local collector with ${Math.round(
     confidence * 100,
   )}% confidence.`;
-}, 'demo.buildNarrative');
+};
 
 export async function GET(request: NextRequest) {
-  const tracer = trace.getTracer('next-fullstack-api');
+  const term = request.nextUrl.searchParams.get('term') || 'clickhouse trace search';
 
-  return tracer.startActiveSpan('demo.api.handle_recommendation', async (span) => {
-    try {
-      const term = request.nextUrl.searchParams.get('term') || 'clickhouse trace search';
-      const source = request.headers.get('x-demo-source') || 'unknown';
+  const recommendation = await lookupRecommendation(term);
+  const narrative = buildNarrative(term, recommendation.confidence);
 
-      span.setAttribute('demo.term', term);
-      span.setAttribute('demo.request.source', source);
-
-      const recommendation = await lookupRecommendation(term);
-      const narrative = buildNarrative(term, recommendation.confidence);
-
-      span.addEvent('demo.response.ready');
-      span.setStatus({ code: SpanStatusCode.OK });
-
-      return NextResponse.json({
-        term,
-        traceId: span.spanContext().traceId,
-        backendService: process.env.OTEL_SERVICE_NAME || 'next-fullstack-api',
-        confidence: recommendation.confidence,
-        tags: recommendation.tags,
-        narrative,
-        receivedAt: new Date().toISOString(),
-      });
-    } catch (caughtError) {
-      span.recordException(caughtError as Error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: caughtError instanceof Error ? caughtError.message : String(caughtError),
-      });
-
-      return NextResponse.json(
-        {
-          error: caughtError instanceof Error ? caughtError.message : String(caughtError),
-        },
-        { status: 500 },
-      );
-    } finally {
-      span.end();
-      await flushSpans().catch(() => {});
-    }
+  return NextResponse.json({
+    term,
+    backendService: process.env.OTEL_SERVICE_NAME || 'next-fullstack-api',
+    confidence: recommendation.confidence,
+    tags: recommendation.tags,
+    narrative,
+    receivedAt: new Date().toISOString(),
   });
 }

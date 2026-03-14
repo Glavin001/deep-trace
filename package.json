@@ -2,19 +2,74 @@
   "name": "deep-trace",
   "version": "0.1.0",
   "description": "Deeply analyze the runtime context of your local apps in development with enhanced OpenTelemetry (OTel)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser-init.d.ts",
+      "default": "./dist/browser-init.js"
+    },
+    "./node": {
+      "types": "./dist/instrumentation.node.d.ts",
+      "default": "./dist/instrumentation.node.js"
+    },
+    "./instrumentation": {
+      "types": "./dist/instrumentation.d.ts",
+      "default": "./dist/instrumentation.js"
+    },
+    "./babel-plugin": "./src/babel-plugin-probe.js"
+  },
+  "files": [
+    "dist",
+    "src/babel-plugin-probe.js"
+  ],
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "build": "tsc --noEmit",
+    "test": "vitest run --exclude src/__tests__/e2e-*",
+    "test:e2e": "vitest run src/__tests__/e2e-distributed-tracing.test.ts --test-timeout=90000",
+    "test:watch": "vitest --exclude src/__tests__/e2e-*",
+    "build": "tsc",
+    "build:check": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
     "stack:up": "bash scripts/prepare-grafana-clickhouse-plugin.sh && docker compose -f stack/local-otel/compose.yaml up -d",
     "stack:down": "docker compose -f stack/local-otel/compose.yaml down",
     "stack:logs": "docker compose -f stack/local-otel/compose.yaml logs --tail=50 clickhouse otel-collector",
     "demo:next:install": "npm install --prefix demos/next-fullstack",
-    "demo:next:dev": "npm run dev --prefix demos/next-fullstack",
-    "demo:next:build": "npm run build --prefix demos/next-fullstack"
+    "demo:next:dev": "npm run dev:otel --prefix demos/next-fullstack",
+    "demo:next:build": "npm run build:otel --prefix demos/next-fullstack"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.0.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.200.0",
+    "@opentelemetry/resources": "^2.0.0",
+    "@opentelemetry/sdk-trace-base": "^2.0.0",
+    "@opentelemetry/semantic-conventions": "^1.28.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/core": {
+      "optional": true
+    },
+    "@opentelemetry/exporter-trace-otlp-http": {
+      "optional": true
+    },
+    "@opentelemetry/resources": {
+      "optional": true
+    },
+    "@opentelemetry/sdk-trace-base": {
+      "optional": true
+    },
+    "@opentelemetry/semantic-conventions": {
+      "optional": true
+    }
   },
   "dependencies": {
-    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "optionalDependencies": {
     "@opentelemetry/auto-instrumentations-node": "^0.71.0",
     "@opentelemetry/core": "^2.6.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",
@@ -22,12 +77,15 @@
     "@opentelemetry/sdk-node": "^0.213.0",
     "@opentelemetry/sdk-trace-base": "^2.6.0",
     "@opentelemetry/sdk-trace-node": "^2.6.0",
+    "@opentelemetry/sdk-trace-web": "^2.6.0",
     "@opentelemetry/semantic-conventions": "^1.40.0",
+    "bippy": "^0.5.32",
     "express": "^4.21.2"
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
     "@babel/parser": "^7.26.0",
+    "@playwright/test": "^1.58.2",
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",

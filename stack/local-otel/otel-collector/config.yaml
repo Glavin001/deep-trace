@@ -7,8 +7,10 @@ receivers:
         endpoint: 0.0.0.0:4318
         cors:
           allowed_origins:
-            - http://localhost:3000
-            - http://127.0.0.1:3000
+            - "*"
+          allowed_headers:
+            - "*"
+          max_age: 7200
 
 processors:
   memory_limiter:

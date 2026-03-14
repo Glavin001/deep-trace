@@ -27,11 +27,14 @@ import {
 } from '@opentelemetry/sdk-trace-base';
 import { ExportResultCode } from '@opentelemetry/core';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
-import { trace, context, SpanStatusCode } from '@opentelemetry/api';
+import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
+import { trace, context, SpanStatusCode, propagation } from '@opentelemetry/api';
 import * as fs from 'fs';
 import { inspect } from 'util';
 import express, { Request, Response } from 'express';
 import { buildRuntimeConfig, isInternalSpanRequest, RuntimeConfig } from './runtime-config';
+import type { SourceMetadata } from './types';
+import { getCallerLocation } from './v8-source-location';
 
 // ===== Configuration (env vars) =====
 const runtimeConfig = buildRuntimeConfig();
@@ -359,35 +362,102 @@ function toStr(v: any): string {
     }
 }
 
-function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'class_method' = 'user_function'): Function {
+/**
+ * For HTTP handlers (GET, POST, etc.), extract W3C trace context from the
+ * incoming Request headers so server spans join the browser's trace.
+ */
+function extractHttpTraceContext(args: any[], metadata?: SourceMetadata) {
+    if (!metadata?.isHttpHandler || args.length === 0) return context.active();
+    try {
+        const request = args[0];
+        if (!request || typeof request !== 'object') return context.active();
+        const headers = request.headers;
+        if (!headers) return context.active();
+
+        // Support both Headers API (.get()) and plain object
+        const carrier: Record<string, string> = {};
+        if (typeof headers.get === 'function') {
+            const tp = headers.get('traceparent');
+            if (tp) carrier.traceparent = tp;
+            const ts = headers.get('tracestate');
+            if (ts) carrier.tracestate = ts;
+        } else if (typeof headers === 'object') {
+            if (headers.traceparent) carrier.traceparent = headers.traceparent;
+            if (headers.tracestate) carrier.tracestate = headers.tracestate;
+        }
+
+        if (!carrier.traceparent) return context.active();
+        return propagation.extract(context.active(), carrier);
+    } catch {
+        return context.active();
+    }
+}
+
+function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'class_method' = 'user_function', metadata?: SourceMetadata): Function {
     if ((fn as any)[WRAPPED]) return fn;
+
+    // Skip generators — wrapping breaks the generator/async-generator protocol
+    const ctorName = fn.constructor?.name;
+    if (ctorName === 'GeneratorFunction' || ctorName === 'AsyncGeneratorFunction') return fn;
     const wrapped = function (this: any, ...args: any[]) {
-        const parentSpan = trace.getSpan(context.active());
+        // For HTTP handlers, extract trace context from request headers
+        const parentCtx = extractHttpTraceContext(args, metadata);
+        const parentSpan = trace.getSpan(parentCtx);
         const parentSpanId = parentSpan?.spanContext()?.spanId;
         const callerName = parentSpanId ? spanNameMap.get(parentSpanId) : undefined;
 
-        const span = tracer.startSpan(spanName);
+        const span = tracer.startSpan(spanName, undefined, parentCtx);
         const spanId = span.spanContext().spanId;
         recordSpanName(spanId, spanName);
 
-        span.setAttribute('function.name', spanName);
-        span.setAttribute('function.type', type);
-        span.setAttribute('function.args.count', args.length);
-        if (callerName) span.setAttribute('function.caller.name', callerName);
-        if (parentSpanId) span.setAttribute('function.caller.spanId', parentSpanId);
+        // Only serialize/set attributes when the span is actually recording.
+        // This avoids triggering side effects (getters, Proxy traps, .toJSON())
+        // on function arguments when tracing is disabled or sampled out.
+        if (span.isRecording()) {
+            span.setAttribute('function.name', spanName);
+            span.setAttribute('function.type', type);
+            span.setAttribute('function.args.count', args.length);
+            if (callerName) span.setAttribute('function.caller.name', callerName);
+            if (parentSpanId) span.setAttribute('function.caller.spanId', parentSpanId);
 
-        const maxArgs = Math.min(args.length, 10);
-        for (let i = 0; i < maxArgs; i++) {
-            span.setAttribute(`function.args.${i}`, toStr(args[i]));
+            // Source location metadata (from Babel plugin or V8 stack traces)
+            if (metadata?.filePath) span.setAttribute('code.filepath', metadata.filePath);
+            if (metadata?.line != null) span.setAttribute('code.lineno', metadata.line);
+            if (metadata?.column != null) span.setAttribute('code.column', metadata.column);
+
+            // React component metadata
+            if (metadata?.isComponent) {
+                span.setAttribute('code.function.type', 'react_component');
+                span.setAttribute('component.name', spanName);
+                if (args.length > 0 && args[0] && typeof args[0] === 'object') {
+                    try {
+                        const props = args[0];
+                        const serializable: Record<string, any> = {};
+                        for (const key of Object.keys(props)) {
+                            const val = props[key];
+                            if (key === 'children' || typeof val === 'function' || typeof val === 'symbol') continue;
+                            serializable[key] = val;
+                        }
+                        if (Object.keys(serializable).length > 0) {
+                            span.setAttribute('component.props', toStr(serializable));
+                        }
+                    } catch { /* props serialization is best-effort */ }
+                }
+            }
+
+            const maxArgs = Math.min(args.length, 10);
+            for (let i = 0; i < maxArgs; i++) {
+                span.setAttribute(`function.args.${i}`, toStr(args[i]));
+            }
         }
 
-        const ctx = trace.setSpan(context.active(), span);
+        const ctx = trace.setSpan(parentCtx, span);
         try {
             const res = context.with(ctx, () => fn.apply(this, args));
             if (res && typeof res === 'object' && typeof res.then === 'function') {
                 return res
                     .then((val: any) => {
-                        span.setAttribute('function.return.value', toStr(val));
+                        if (span.isRecording()) span.setAttribute('function.return.value', toStr(val));
                         span.setStatus({ code: SpanStatusCode.OK });
                         span.end();
                         cleanupSpanName(spanId);
@@ -401,7 +471,7 @@ function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'c
                         throw err;
                     });
             }
-            span.setAttribute('function.return.value', toStr(res));
+            if (span.isRecording()) span.setAttribute('function.return.value', toStr(res));
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
             cleanupSpanName(spanId);
@@ -415,12 +485,38 @@ function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'c
         }
     };
     (wrapped as any)[WRAPPED] = true;
+
+    // Preserve fn.length (arity) and fn.name to avoid breaking frameworks
+    // that inspect these (e.g. Express checks fn.length to distinguish middleware from error handlers)
+    try {
+        Object.defineProperty(wrapped, 'length', { value: fn.length, configurable: true });
+        Object.defineProperty(wrapped, 'name', { value: fn.name || spanName, configurable: true });
+    } catch { /* best-effort */ }
+
+    // Copy custom properties (e.g. displayName, defaultProps) from original to wrapper
+    try {
+        const descriptors = Object.getOwnPropertyDescriptors(fn);
+        for (const key of Object.keys(descriptors)) {
+            if (key === 'length' || key === 'name' || key === 'prototype' || key === 'arguments' || key === 'caller') continue;
+            try { Object.defineProperty(wrapped, key, descriptors[key]); } catch { /* skip non-configurable */ }
+        }
+    } catch { /* best-effort */ }
+
     return wrapped;
 }
 
 /** Wrap a function for tracing. Use from user code or from the Babel plugin. */
-export function wrapUserFunction<T extends (...args: any[]) => any>(fn: T, name?: string): T {
-    return wrapFunction(fn, name || fn.name || 'anonymous', 'user_function') as T;
+export function wrapUserFunction<T extends (...args: any[]) => any>(fn: T, name?: string, metadata?: SourceMetadata): T {
+    // V8 stack trace fallback: capture source location at registration time (not invocation time)
+    if (!metadata && runtimeConfig.v8SourceEnabled) {
+        try {
+            const loc = getCallerLocation(2);
+            if (loc) {
+                metadata = { filePath: loc.filePath, line: loc.line, column: loc.column };
+            }
+        } catch { /* V8 source location is best-effort */ }
+    }
+    return wrapFunction(fn, name || fn.name || 'anonymous', 'user_function', metadata) as T;
 }
 
 /** Wrap all methods on an object */
@@ -583,9 +679,10 @@ function startServer() {
         }
     });
 
-    const server = app.listen(SERVER_PORT, () => {
+    const SERVER_HOST = runtimeConfig.serverHost;
+    const server = app.listen(SERVER_PORT, SERVER_HOST, () => {
         serverStarted = true;
-        log.info(`Debug probe HTTP server listening on port ${SERVER_PORT}`);
+        log.info(`Debug probe HTTP server listening on ${SERVER_HOST}:${SERVER_PORT}`);
     });
     server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
@@ -621,7 +718,12 @@ export function createSdk(config: RuntimeConfig = runtimeConfig): NodeSDK {
     return new NodeSDK({
         serviceName: config.serviceName,
         spanProcessors: createSpanProcessors(config),
-        instrumentations: config.isDevelopment ? [] : [getNodeAutoInstrumentations()],
+        // In dev mode, only enable HTTP instrumentation for trace context propagation
+        // (extracts W3C traceparent from incoming requests so server spans join browser traces).
+        // In production, enable all auto-instrumentations for full observability.
+        instrumentations: config.isDevelopment
+            ? [new HttpInstrumentation()]
+            : [getNodeAutoInstrumentations()],
     });
 }
 

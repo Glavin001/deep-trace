@@ -331,4 +331,224 @@ describe('probe-wrapper', () => {
             expect(span.attributes['function.return.value']).toBe('42');
         });
     });
+
+    describe('source metadata', () => {
+        it('should set code.filepath attribute when metadata provided', async () => {
+            clearSpans();
+            function myFn() { return 1; }
+            const wrapped = wrapUserFunction(myFn, 'myFn', { filePath: 'src/app/page.tsx', line: 10, column: 4 });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.filepath']).toBe('src/app/page.tsx');
+        });
+
+        it('should set code.lineno and code.column attributes when metadata provided', async () => {
+            clearSpans();
+            function myFn() { return 1; }
+            const wrapped = wrapUserFunction(myFn, 'myFn', { filePath: 'test.ts', line: 42, column: 8 });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.lineno']).toBe(42);
+            expect(span.attributes['code.column']).toBe(8);
+        });
+
+        it('should set code.column to 0 when column is 0', async () => {
+            clearSpans();
+            function myFn() { return 1; }
+            const wrapped = wrapUserFunction(myFn, 'myFn', { filePath: 'test.ts', line: 1, column: 0 });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.column']).toBe(0);
+        });
+
+        it('should set code.function.type to react_component when isComponent is true', async () => {
+            clearSpans();
+            function MyComponent(props: any) { return props; }
+            const wrapped = wrapUserFunction(MyComponent, 'MyComponent', { filePath: 'test.tsx', line: 5, column: 0, isComponent: true });
+            wrapped({ title: 'Hello', count: 3 });
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.function.type']).toBe('react_component');
+            expect(span.attributes['component.name']).toBe('MyComponent');
+        });
+
+        it('should serialize component props excluding children and functions', async () => {
+            clearSpans();
+            function MyComponent(props: any) { return props; }
+            const wrapped = wrapUserFunction(MyComponent, 'MyComponent', { isComponent: true });
+            wrapped({
+                title: 'Hello',
+                count: 3,
+                children: '<div />',
+                onClick: () => {},
+                id: Symbol('test'),
+            });
+
+            await flush();
+            const span = lastSpan();
+            const propsStr = span.attributes['component.props'] as string;
+            expect(propsStr).toContain('title');
+            expect(propsStr).toContain('Hello');
+            expect(propsStr).toContain('count');
+            expect(propsStr).not.toContain('children');
+            expect(propsStr).not.toContain('onClick');
+            expect(propsStr).not.toContain('Symbol');
+        });
+
+        it('should not set component attributes when isComponent is false/undefined', async () => {
+            clearSpans();
+            function myFn() { return 1; }
+            const wrapped = wrapUserFunction(myFn, 'myFn', { filePath: 'test.ts', line: 1 });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.function.type']).toBeUndefined();
+            expect(span.attributes['component.name']).toBeUndefined();
+            expect(span.attributes['component.props']).toBeUndefined();
+        });
+
+        it('should work without metadata (backward compatible)', async () => {
+            clearSpans();
+            function plainFn() { return 'ok'; }
+            const wrapped = wrapUserFunction(plainFn, 'plainFn');
+            const result = wrapped();
+
+            expect(result).toBe('ok');
+            await flush();
+            const span = lastSpan();
+            expect(span.name).toBe('plainFn');
+            expect(span.attributes['function.name']).toBe('plainFn');
+            // No code.* attributes expected
+        });
+
+        it('should handle component with no props gracefully', async () => {
+            clearSpans();
+            function EmptyComponent() { return null; }
+            const wrapped = wrapUserFunction(EmptyComponent, 'EmptyComponent', { isComponent: true });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['component.name']).toBe('EmptyComponent');
+            expect(span.attributes['component.props']).toBeUndefined();
+        });
+
+        it('should handle component with only non-serializable props', async () => {
+            clearSpans();
+            function MyComponent(props: any) { return null; }
+            const wrapped = wrapUserFunction(MyComponent, 'MyComponent', { isComponent: true });
+            wrapped({ children: '<div />', onClick: () => {} });
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['component.name']).toBe('MyComponent');
+            // No serializable props → component.props should not be set
+            expect(span.attributes['component.props']).toBeUndefined();
+        });
+
+        it('should set code.lineno to 0 when line is 0 (first line of file)', async () => {
+            clearSpans();
+            function myFn() { return 1; }
+            const wrapped = wrapUserFunction(myFn, 'myFn', { filePath: 'test.ts', line: 0, column: 0 });
+            wrapped();
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['code.lineno']).toBe(0);
+        });
+    });
+
+    describe('silent observer guarantees', () => {
+        it('should preserve function.length (arity)', () => {
+            function zeroArgs() { return 0; }
+            function oneArg(_a: any) { return 1; }
+            function twoArgs(_a: any, _b: any) { return 2; }
+            function threeArgs(_a: any, _b: any, _c: any) { return 3; }
+            function fourArgs(_a: any, _b: any, _c: any, _d: any) { return 4; }
+
+            expect(wrapUserFunction(zeroArgs).length).toBe(0);
+            expect(wrapUserFunction(oneArg).length).toBe(1);
+            expect(wrapUserFunction(twoArgs).length).toBe(2);
+            expect(wrapUserFunction(threeArgs).length).toBe(3);
+            expect(wrapUserFunction(fourArgs).length).toBe(4);
+        });
+
+        it('should preserve function.name', () => {
+            function myNamedFunction() { return 1; }
+            const wrapped = wrapUserFunction(myNamedFunction);
+            expect(wrapped.name).toBe('myNamedFunction');
+        });
+
+        it('should use spanName for anonymous functions name', () => {
+            const wrapped = wrapUserFunction(() => 1, 'mySpanName');
+            expect(wrapped.name).toBe('mySpanName');
+        });
+
+        it('should return generator functions unwrapped', () => {
+            function* myGenerator() { yield 1; yield 2; }
+            const wrapped = wrapUserFunction(myGenerator as any);
+            // Should be the exact same function — not wrapped
+            expect(wrapped).toBe(myGenerator);
+        });
+
+        it('should return async generator functions unwrapped', () => {
+            async function* myAsyncGen() { yield 1; }
+            const wrapped = wrapUserFunction(myAsyncGen as any);
+            expect(wrapped).toBe(myAsyncGen);
+        });
+
+        it('should copy custom properties from original to wrapper', () => {
+            function myFn() { return 1; }
+            (myFn as any).displayName = 'CustomDisplay';
+            (myFn as any).defaultProps = { size: 'medium' };
+
+            const wrapped = wrapUserFunction(myFn, 'myFn');
+            expect((wrapped as any).displayName).toBe('CustomDisplay');
+            expect((wrapped as any).defaultProps).toEqual({ size: 'medium' });
+        });
+
+        it('should re-throw the exact same error object (reference equality)', async () => {
+            const originalError = new Error('test error');
+            function failingFn() { throw originalError; }
+            const wrapped = wrapUserFunction(failingFn, 'failingFn');
+
+            let caughtError: any;
+            try { wrapped(); } catch (e) { caughtError = e; }
+            expect(caughtError).toBe(originalError); // Exact same reference
+        });
+
+        it('should re-throw the exact same error in async functions', async () => {
+            const originalError = new Error('async test error');
+            async function failingAsync() { throw originalError; }
+            const wrapped = wrapUserFunction(failingAsync, 'failingAsync');
+
+            let caughtError: any;
+            try { await wrapped(); } catch (e) { caughtError = e; }
+            expect(caughtError).toBe(originalError); // Exact same reference
+        });
+
+        it('should handle thenable (Promise-compatible) objects', async () => {
+            clearSpans();
+            // A thenable that returns a proper chainable (has .then and .catch)
+            function thenableFn() {
+                return Promise.resolve(42);
+            }
+            const wrapped = wrapUserFunction(thenableFn, 'thenableFn');
+
+            const result = await wrapped();
+            expect(result).toBe(42);
+
+            await flush();
+            const span = lastSpan();
+            expect(span.attributes['function.return.value']).toBe('42');
+        });
+    });
 });

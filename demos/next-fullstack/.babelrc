@@ -1,0 +1,11 @@
+{
+  "presets": ["next/babel"],
+  "plugins": [
+    ["../../src/babel-plugin-probe", {
+      "importPath": "../../src/probe-wrapper",
+      "resolveFromRoot": true,
+      "include": ["/app/", "/components/"],
+      "exclude": ["/node_modules/", "/.next/"]
+    }]
+  ]
+}

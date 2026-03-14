@@ -10,12 +10,16 @@ export interface RuntimeConfig {
     logFile: string;
     maxSpans: number;
     serverPort: number;
+    /** Host to bind the debug HTTP server to (default: '127.0.0.1'). */
+    serverHost: string;
     isDevelopment: boolean;
     serviceName: string;
     otlpHttpEndpoint?: string;
     otlpHeaders: Record<string, string>;
     otlpTimeoutMillis: number;
     otlpConcurrencyLimit: number;
+    /** Whether to use V8 stack traces for source location fallback (default: true). */
+    v8SourceEnabled: boolean;
 }
 
 export interface SpanRequestAttributes {
@@ -77,12 +81,14 @@ export function buildRuntimeConfig(env: NodeJS.ProcessEnv = process.env, cwd: st
         logFile: path.join(jsonlDir, 'probe.log'),
         maxSpans: parseInteger(env.DEBUG_PROBE_MAX_SPANS, 10000),
         serverPort: parseInteger(env.DEBUG_PROBE_PORT, 43210),
+        serverHost: env.DEBUG_PROBE_HOST || '127.0.0.1',
         isDevelopment: env.NODE_ENV === 'development',
         serviceName: env.OTEL_SERVICE_NAME || env.DEBUG_PROBE_SERVICE_NAME || 'deep-trace-node',
         otlpHttpEndpoint: normalizeOtlpHttpEndpoint(tracesEndpoint),
         otlpHeaders: parseHeaderList(env.DEBUG_PROBE_OTLP_HEADERS || env.OTEL_EXPORTER_OTLP_HEADERS),
         otlpTimeoutMillis: parseInteger(env.DEBUG_PROBE_OTLP_TIMEOUT_MS, 10000),
         otlpConcurrencyLimit: parseInteger(env.DEBUG_PROBE_OTLP_CONCURRENCY, 10),
+        v8SourceEnabled: env.DEBUG_PROBE_V8_SOURCE !== 'false',
     };
 }
 

@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve the project root relative to this script's location.
+# Works on both Linux and macOS, whether invoked directly or via npm scripts.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 PLUGIN_ID="grafana-clickhouse-datasource"
 PLUGIN_VERSION="${PLUGIN_VERSION:-4.14.0}"
-PLUGIN_DIR="/workspace/stack/local-otel/grafana/plugins"
+PLUGIN_DIR="${PROJECT_ROOT}/stack/local-otel/grafana/plugins"
 PLUGIN_PATH="${PLUGIN_DIR}/${PLUGIN_ID}"
-TMP_ZIP="/tmp/${PLUGIN_ID}-${PLUGIN_VERSION}.zip"
+TMP_ZIP="${TMPDIR:-/tmp}/${PLUGIN_ID}-${PLUGIN_VERSION}.zip"
 
 mkdir -p "${PLUGIN_DIR}"
 if [ ! -f "${PLUGIN_PATH}/plugin.json" ]; then
@@ -16,28 +21,29 @@ if [ ! -f "${PLUGIN_PATH}/plugin.json" ]; then
   echo "Downloading ${PLUGIN_ID}@${PLUGIN_VERSION}"
   curl --fail --location --silent --show-error "${DOWNLOAD_URL}" --output "${TMP_ZIP}"
 
-  export PLUGIN_ID PLUGIN_VERSION
-  python3 - <<'PY'
-import os
-import pathlib
-import shutil
-import zipfile
+  # Extract zip — use unzip (available on both Linux and macOS, no python3 needed)
+  if ! command -v unzip >/dev/null 2>&1; then
+    echo "Error: 'unzip' is required but not found. Install it with:" >&2
+    echo "  Linux:  sudo apt-get install unzip" >&2
+    echo "  macOS:  unzip is pre-installed" >&2
+    exit 1
+  fi
 
-plugin_dir = pathlib.Path("/workspace/stack/local-otel/grafana/plugins")
-plugin_id = os.environ["PLUGIN_ID"]
-plugin_version = os.environ["PLUGIN_VERSION"]
-tmp_zip = pathlib.Path(f"/tmp/{plugin_id}-{plugin_version}.zip")
+  unzip -q -o "${TMP_ZIP}" -d "${PLUGIN_DIR}"
 
-with zipfile.ZipFile(tmp_zip) as zf:
-    zf.extractall(plugin_dir)
+  # The zip may extract into a differently-named directory. Find plugin.json
+  # and rename its parent to the expected plugin ID directory.
+  FOUND_PLUGIN_JSON="$(find "${PLUGIN_DIR}" -maxdepth 3 -name plugin.json -print -quit)"
+  if [ -z "${FOUND_PLUGIN_JSON}" ]; then
+    echo "Error: plugin.json not found after extraction" >&2
+    exit 1
+  fi
 
-plugin_json = next(plugin_dir.glob("**/plugin.json"))
-expected_dir = plugin_dir / plugin_id
-if plugin_json.parent != expected_dir:
-    if expected_dir.exists():
-        shutil.rmtree(expected_dir)
-    shutil.move(str(plugin_json.parent), str(expected_dir))
-PY
+  EXTRACTED_DIR="$(dirname "${FOUND_PLUGIN_JSON}")"
+  if [ "${EXTRACTED_DIR}" != "${PLUGIN_PATH}" ]; then
+    rm -rf "${PLUGIN_PATH}"
+    mv "${EXTRACTED_DIR}" "${PLUGIN_PATH}"
+  fi
 
   rm -f "${TMP_ZIP}"
 fi
