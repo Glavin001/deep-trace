@@ -24,6 +24,32 @@ if (isBrowser) {
 const tracer = trace.getTracer('probe-wrapper');
 const WRAPPED = Symbol('probe_wrapped');
 
+// ===== Browser async context tracking =====
+// In browsers, context.with() only preserves context synchronously.
+// After an `await`, context.active() returns the root context.
+// We maintain a stack of span contexts so the fetch patch and inner
+// functions can find their parent even after async gaps.
+
+const _browserCtxStack: import('@opentelemetry/api').Context[] = [];
+
+/** Push a span context onto the browser tracking stack */
+function pushBrowserCtx(ctx: import('@opentelemetry/api').Context): void {
+    if (isBrowser) _browserCtxStack.push(ctx);
+}
+
+/** Pop a span context from the browser tracking stack */
+function popBrowserCtx(): void {
+    if (isBrowser) _browserCtxStack.pop();
+}
+
+/**
+ * Get the current browser span context (for use by the fetch patch).
+ * Returns the top of the stack, or undefined if empty.
+ */
+export function getActiveBrowserContext(): import('@opentelemetry/api').Context | undefined {
+    return _browserCtxStack.length > 0 ? _browserCtxStack[_browserCtxStack.length - 1] : undefined;
+}
+
 function isPromiseLike(val: any): val is Promise<any> {
     return val && typeof val === 'object' && typeof val.then === 'function';
 }
@@ -163,6 +189,9 @@ function wrapFunction(fn: Function, spanName: string, metadata?: SourceMetadata)
         }
 
         const ctx = trace.setSpan(parentCtx, span);
+        // Push context onto browser stack so fetch and inner functions
+        // can find their parent even after async gaps (await).
+        pushBrowserCtx(ctx);
         try {
             const res = context.with(ctx, () => fn.apply(this, args));
             if (isPromiseLike(res)) {
@@ -170,23 +199,27 @@ function wrapFunction(fn: Function, spanName: string, metadata?: SourceMetadata)
                     .then((val) => {
                         if (span.isRecording()) span.setAttribute('function.return.value', toStr(val));
                         span.setStatus({ code: SpanStatusCode.OK });
+                        popBrowserCtx();
                         span.end();
                         return val;
                     })
                     .catch((err) => {
                         span.recordException(err);
                         span.setStatus({ code: SpanStatusCode.ERROR, message: String(err?.message || err) });
+                        popBrowserCtx();
                         span.end();
                         throw err;
                     });
             }
             if (span.isRecording()) span.setAttribute('function.return.value', toStr(res));
             span.setStatus({ code: SpanStatusCode.OK });
+            popBrowserCtx();
             span.end();
             return res;
         } catch (err: any) {
             span.recordException(err);
             span.setStatus({ code: SpanStatusCode.ERROR, message: String(err?.message || err) });
+            popBrowserCtx();
             span.end();
             throw err;
         }
