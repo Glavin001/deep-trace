@@ -15,8 +15,10 @@
  * No other imports or API calls needed in application code.
  */
 
-import { context, propagation, trace } from '@opentelemetry/api';
+import { context, propagation, trace, SpanStatusCode } from '@opentelemetry/api';
+import type { Context } from '@opentelemetry/api';
 import { initReactInstrumentation } from './react-fiber-extractor';
+import { getActiveBrowserContext } from './probe-wrapper';
 
 // ===== Configuration (env vars / globals) =====
 
@@ -130,23 +132,72 @@ function patchGlobalFetch(): void {
         }
 
         try {
+            // Determine the URL and method for the fetch span
+            const url = input instanceof Request ? input.url : String(input);
+
+            // Skip span creation for OTel exporter's own requests to avoid infinite loop
+            // (export → fetch span → export → fetch span → ...)
+            if (url.includes('/v1/traces') || url.includes('/v1/metrics') || url.includes('/v1/logs')) {
+                return originalFetch.call(this, input, init);
+            }
+
+            const method = (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+            // Parse out just the pathname for the span name
+            let pathname: string;
+            try { pathname = new URL(url, window.location.origin).pathname; } catch { pathname = url; }
+
+            // Resolve parent context: OTel active > browser async stack > root
+            const otelCtx = context.active();
+            const browserCtx = getActiveBrowserContext();
+            const parentCtx: Context = trace.getSpan(otelCtx)
+                ? otelCtx
+                : (browserCtx || otelCtx);
+
+            // Create a fetch span visible in the waterfall
+            const fetchTracer = trace.getTracer('browser-fetch');
+            const span = fetchTracer.startSpan(`fetch ${method} ${pathname}`, {
+                attributes: {
+                    'http.method': method,
+                    'http.url': url.length > 500 ? url.slice(0, 500) : url,
+                    'fetch.type': 'xmlhttprequest',
+                },
+            }, parentCtx);
+
             // Merge headers from both Request object and init to avoid dropping any
             const existingHeaders = input instanceof Request ? input.headers : undefined;
             const headers = new Headers(init?.headers ?? existingHeaders);
-            // If init.headers was provided AND input is a Request, merge both
             if (init?.headers && existingHeaders) {
                 existingHeaders.forEach((value, key) => {
                     if (!headers.has(key)) headers.set(key, value);
                 });
             }
-            propagation.inject(context.active(), headers, {
+
+            // Inject traceparent from the fetch span's context
+            const fetchCtx = trace.setSpan(parentCtx, span);
+            propagation.inject(fetchCtx, headers, {
                 set(carrier, key, value) {
                     carrier.set(key, value);
                 },
             });
-            return originalFetch.call(this, input, { ...init, headers });
+
+            return originalFetch.call(this, input, { ...init, headers })
+                .then((response: Response) => {
+                    span.setAttribute('http.status_code', response.status);
+                    span.setStatus({
+                        code: response.ok ? SpanStatusCode.OK : SpanStatusCode.ERROR,
+                        message: response.ok ? undefined : `HTTP ${response.status}`,
+                    });
+                    span.end();
+                    return response;
+                })
+                .catch((err: Error) => {
+                    span.recordException(err);
+                    span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+                    span.end();
+                    throw err;
+                });
         } catch {
-            // If header injection fails, call original fetch unmodified
+            // If span creation or header injection fails, call original fetch unmodified
             return originalFetch.call(this, input, init);
         }
     };

@@ -14,6 +14,38 @@
 | Watch tests | `npm run test:watch` |
 | Start Docker in Cursor Cloud | `bash scripts/start-docker.sh` |
 
+### Trace Viewer (`apps/trace-viewer/`)
+
+A local web UI for exploring OpenTelemetry traces stored in ClickHouse — no Grafana needed.
+
+| Action | Command |
+|---|---|
+| Install deps | `npm run viewer:install` |
+| Dev mode (client + server) | `npm run viewer:dev` |
+| Build | `npm run viewer:build` |
+| E2E tests (requires Docker stack) | `cd apps/trace-viewer && npm run test:e2e` |
+
+- **Frontend**: React + Vite + Tailwind CSS on port 3005 (proxied to server).
+- **Backend**: Express + `@clickhouse/client` on port 3004. Endpoints: `/api/traces`, `/api/traces/:traceId`, `/api/services`, `/api/source`, `/api/health`.
+- **Source viewer**: The `/api/source` endpoint resolves `code.filepath` span attributes to actual files on disk. It searches `demos/`, `apps/`, `packages/`, and `examples/` subdirectories when the direct path isn't found. Directory traversal is blocked.
+- **Timestamps**: ClickHouse DateTime64 returns `"2026-03-14 10:27:31.123"` (no `Z` suffix). The shared `parseTimestamp()` in `src/utils.ts` normalizes these to proper UTC Date objects.
+
+### Browser Instrumentation (`src/browser-init.ts`)
+
+Key architectural details for anyone modifying the browser tracing:
+
+- **Fetch patch**: `globalThis.fetch` is patched to create visible spans (`fetch GET /path`) and inject W3C `traceparent` headers. OTLP exporter URLs (`/v1/traces`, `/v1/metrics`, `/v1/logs`) are **excluded** to prevent an infinite feedback loop (export → span → export → …).
+- **Async context stack**: Browsers lose `context.active()` after `await`. `probe-wrapper.ts` maintains a `_browserCtxStack` so that fetch calls and inner functions find their parent span across async gaps.
+- **Wrap-time context capture**: `wrapFunction()` captures `context.active()` when the wrapper is created (e.g., during a component render). When the wrapped function fires later (e.g., a click handler) with no active span, it falls back to this captured context, linking event handlers to the component that defined them.
+
+### Demo App (`demos/next-fullstack/`)
+
+A Next.js app demonstrating full-stack distributed tracing. Zero tracing imports in application code — everything is auto-instrumented by the Babel plugin and browser-init.
+
+- **Frontend flow**: `DemoPanel` render → `runDemo` click → `validateInput` → `buildSearchContext` → fetch `/api/analyze` → `processAnalysisResults` → fetch `/api/enrich` → `mergeAndFormat`. Produces ~20 spans per trace across browser and server.
+- **Server routes**: `/api/analyze` (6 spans) and `/api/enrich` (5 spans), each with multiple helper functions.
+- Run with `npm run dev` from `demos/next-fullstack/`. Requires the Docker collector stack (`stack/local-otel/compose.yaml`).
+
 ### Notes
 
 - **Node.js 22** is required (matches CI and `@types/node` version).

@@ -55,8 +55,9 @@ npm run demo:next:dev
 
 1. Open http://127.0.0.1:3000
 2. Click "Emit frontend + backend trace"
-3. Open Grafana at http://127.0.0.1:3002 — go to Explore, select the ClickHouse datasource, and query `otel.otel_traces`
-4. Or query spans directly:
+3. Open the **Trace Viewer** at http://127.0.0.1:3005 for a purpose-built trace exploration UI (see below)
+4. Or open Grafana at http://127.0.0.1:3002 — go to Explore, select the ClickHouse datasource, and query `otel.otel_traces`
+5. Or query spans directly:
 
 ```bash
 # Recent traces
@@ -188,6 +189,24 @@ It skips:
 └──────────────────┴──────────────────────────┘
 ```
 
+## Trace Viewer
+
+A local web UI purpose-built for deep-trace, replacing the need to open Grafana for everyday trace exploration.
+
+```bash
+npm run viewer:install   # Install trace viewer dependencies
+npm run viewer:dev       # Start the viewer (http://127.0.0.1:3005)
+```
+
+Features:
+- **Trace list** — Search, filter by service, auto-refresh, duration bars
+- **Waterfall timeline** — Hierarchical span visualization with parent-child nesting, color-coded by service
+- **Span detail panel** — Function args, return values, component props, caller chain, grouped attributes
+- **Source code viewer** — Reads actual source files using `code.filepath` and `code.lineno` span attributes, with line highlighting
+- **Distributed trace linking** — Follows W3C `traceparent` across browser → server boundaries in a single view
+
+The viewer backend (Express, port 3004) queries ClickHouse directly and serves source files from the repo. The frontend (React + Vite + Tailwind, port 3005) proxies API requests to the backend.
+
 ## Configuration
 
 All configuration via environment variables:
@@ -228,8 +247,10 @@ src/
   runtime-config.ts         # Environment variable configuration
   types.ts                  # Shared TypeScript types
   __tests__/                # 194 tests across 15 files
+apps/
+  trace-viewer/             # Local trace exploration UI (React + Express + ClickHouse)
 demos/
-  next-fullstack/           # Zero-code Next.js demo app
+  next-fullstack/           # Zero-code Next.js demo app (two API routes, ~20 spans/trace)
 stack/
   local-otel/               # Docker Compose: OTel Collector + ClickHouse + Grafana
 ```
