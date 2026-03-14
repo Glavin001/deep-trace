@@ -50,6 +50,7 @@
     "demo:dt:install": "npm install --prefix demos/deeptrace-demo",
     "demo:dt:run": "npx tsx demos/deeptrace-demo/demo.ts",
     "demo:dt:agent": "npx tsx demos/deeptrace-demo/agent-demo.ts",
+    "demo:dt:scenarios": "npx tsx demos/deeptrace-demo/debugging-scenarios.ts",
     "viewer:install": "npm install --prefix apps/trace-viewer",
     "viewer:dev": "npm run dev --prefix apps/trace-viewer",
     "viewer:build": "npm run build --prefix apps/trace-viewer",
