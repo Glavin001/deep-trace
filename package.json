@@ -95,6 +95,7 @@
     "@opentelemetry/sdk-trace-web": "^2.6.0",
     "@opentelemetry/semantic-conventions": "^1.40.0",
     "bippy": "^0.5.32",
+    "cors": "^2.8.6",
     "express": "^4.21.2"
   },
   "devDependencies": {

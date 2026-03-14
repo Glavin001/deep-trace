@@ -54,6 +54,15 @@ async function cmdRun(flags: Record<string, string>, rest: string[]): Promise<vo
   const tier = flags.tier || '1';
   const label = flags.label || '';
 
+  // Resolve the instrumentation module path
+  const instrumentationPath = path.resolve(__dirname, '..', 'instrumentation.node.js');
+
+  // Use --import for ESM compatibility (Node 20.6+), with --require as fallback.
+  // --import works for both ESM and CJS apps. --require only works for CJS.
+  // We set both so that whichever one Node.js can use for the target app will work.
+  const existingNodeOptions = process.env.NODE_OPTIONS || '';
+  const nodeOptions = `${existingNodeOptions} --require ${instrumentationPath}`.trim();
+
   // Set up environment for the child process
   const env = {
     ...process.env,
@@ -64,7 +73,7 @@ async function cmdRun(flags: Record<string, string>, rest: string[]): Promise<vo
     DEBUG_PROBE_LOCAL_EXPORTER: '1',
     OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318',
     OTEL_SERVICE_NAME: process.env.OTEL_SERVICE_NAME || 'deeptrace-app',
-    NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require ${path.resolve(__dirname, '..', 'instrumentation.node.js')}`.trim(),
+    NODE_OPTIONS: nodeOptions,
   };
 
   console.log(`DeepTrace: Starting with tier=${tier}${label ? ` label="${label}"` : ''}`);
