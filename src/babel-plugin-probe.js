@@ -105,7 +105,7 @@ module.exports = function (api, options = {}) {
      * Line/column come from the Babel AST node.loc, which always reflects the
      * ORIGINAL source positions (not transpiled output).
      */
-    function buildMetadataObject(state, node, isComponent) {
+    function buildMetadataObject(state, node, isComponent, isHttpHandler) {
         const resourcePath = state.filename || (state.file && state.file.opts.filename);
         const relPath = resourcePath
             ? nodePath.relative(process.cwd(), resourcePath).replace(/\\/g, '/')
@@ -117,6 +117,10 @@ module.exports = function (api, options = {}) {
             t.objectProperty(t.identifier('column'), t.numericLiteral(node.loc?.start.column ?? 0)),
             t.objectProperty(t.identifier('isComponent'), t.booleanLiteral(isComponent)),
         ];
+
+        if (isHttpHandler) {
+            props.push(t.objectProperty(t.identifier('isHttpHandler'), t.booleanLiteral(true)));
+        }
 
         return t.objectExpression(props);
     }
@@ -234,7 +238,7 @@ module.exports = function (api, options = {}) {
                 const internalName = `_unwrapped_${name}`;
                 path.node.id.name = internalName;
 
-                const metadataObj = buildMetadataObject(state, path.node, isComponent);
+                const metadataObj = buildMetadataObject(state, path.node, isComponent, isApiHandler);
 
                 const wrapperDeclarator = t.variableDeclarator(
                     t.identifier(name),
@@ -273,14 +277,14 @@ module.exports = function (api, options = {}) {
                 if (init.generator) return;
 
                 const isExported = state.exportedFunctions.has(name);
-                const { wrap, isComponent } = shouldWrap(name, isExported);
+                const { wrap, isApiHandler, isComponent } = shouldWrap(name, isExported);
                 if (!wrap) return;
 
                 // Rename: const _unwrapped_MyComponent = (props) => <div />;
                 const internalName = `_unwrapped_${name}`;
                 path.node.id.name = internalName;
 
-                const metadataObj = buildMetadataObject(state, init, isComponent);
+                const metadataObj = buildMetadataObject(state, init, isComponent, isApiHandler);
 
                 const wrapperDeclarator = t.variableDeclarator(
                     t.identifier(name),

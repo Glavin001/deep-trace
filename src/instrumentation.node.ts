@@ -28,7 +28,7 @@ import {
 import { ExportResultCode } from '@opentelemetry/core';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
-import { trace, context, SpanStatusCode } from '@opentelemetry/api';
+import { trace, context, SpanStatusCode, propagation } from '@opentelemetry/api';
 import * as fs from 'fs';
 import { inspect } from 'util';
 import express, { Request, Response } from 'express';
@@ -362,6 +362,37 @@ function toStr(v: any): string {
     }
 }
 
+/**
+ * For HTTP handlers (GET, POST, etc.), extract W3C trace context from the
+ * incoming Request headers so server spans join the browser's trace.
+ */
+function extractHttpTraceContext(args: any[], metadata?: SourceMetadata) {
+    if (!metadata?.isHttpHandler || args.length === 0) return context.active();
+    try {
+        const request = args[0];
+        if (!request || typeof request !== 'object') return context.active();
+        const headers = request.headers;
+        if (!headers) return context.active();
+
+        // Support both Headers API (.get()) and plain object
+        const carrier: Record<string, string> = {};
+        if (typeof headers.get === 'function') {
+            const tp = headers.get('traceparent');
+            if (tp) carrier.traceparent = tp;
+            const ts = headers.get('tracestate');
+            if (ts) carrier.tracestate = ts;
+        } else if (typeof headers === 'object') {
+            if (headers.traceparent) carrier.traceparent = headers.traceparent;
+            if (headers.tracestate) carrier.tracestate = headers.tracestate;
+        }
+
+        if (!carrier.traceparent) return context.active();
+        return propagation.extract(context.active(), carrier);
+    } catch {
+        return context.active();
+    }
+}
+
 function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'class_method' = 'user_function', metadata?: SourceMetadata): Function {
     if ((fn as any)[WRAPPED]) return fn;
 
@@ -369,11 +400,13 @@ function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'c
     const ctorName = fn.constructor?.name;
     if (ctorName === 'GeneratorFunction' || ctorName === 'AsyncGeneratorFunction') return fn;
     const wrapped = function (this: any, ...args: any[]) {
-        const parentSpan = trace.getSpan(context.active());
+        // For HTTP handlers, extract trace context from request headers
+        const parentCtx = extractHttpTraceContext(args, metadata);
+        const parentSpan = trace.getSpan(parentCtx);
         const parentSpanId = parentSpan?.spanContext()?.spanId;
         const callerName = parentSpanId ? spanNameMap.get(parentSpanId) : undefined;
 
-        const span = tracer.startSpan(spanName);
+        const span = tracer.startSpan(spanName, undefined, parentCtx);
         const spanId = span.spanContext().spanId;
         recordSpanName(spanId, spanName);
 
@@ -418,7 +451,7 @@ function wrapFunction(fn: Function, spanName: string, type: 'user_function' | 'c
             }
         }
 
-        const ctx = trace.setSpan(context.active(), span);
+        const ctx = trace.setSpan(parentCtx, span);
         try {
             const res = context.with(ctx, () => fn.apply(this, args));
             if (res && typeof res === 'object' && typeof res.then === 'function') {

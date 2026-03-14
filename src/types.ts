@@ -12,4 +12,6 @@ export interface SourceMetadata {
     column?: number;
     /** True when the wrapped function is a React component (PascalCase). */
     isComponent?: boolean;
+    /** True when the function is an HTTP handler (GET, POST, etc.) that receives a Request object. */
+    isHttpHandler?: boolean;
 }
