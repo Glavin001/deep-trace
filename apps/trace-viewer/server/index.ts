@@ -23,6 +23,16 @@ const ch = createClient({
   request_timeout: 10_000,
 });
 
+/** Parse ClickHouse DateTime64 (UTC, no 'Z' suffix) into epoch ms */
+function parseChTimestamp(ts: string): number {
+  if (!ts) return 0;
+  // ClickHouse returns "2026-03-14 10:27:31.123456789" (no T, no Z) — always UTC
+  if (!ts.endsWith('Z') && !ts.includes('+') && !ts.includes('T')) {
+    return new Date(ts.replace(' ', 'T') + 'Z').getTime();
+  }
+  return new Date(ts).getTime();
+}
+
 // ── PROJECT_ROOT: resolve the deep-trace repo root for source file reading ──
 
 const PROJECT_ROOT = process.env.PROJECT_ROOT || path.resolve(
@@ -162,7 +172,7 @@ app.get('/api/traces/:traceId', async (req, res) => {
     }));
 
     // Compute trace-level info
-    const timestamps = spans.map((s: any) => new Date(s.timestamp).getTime());
+    const timestamps = spans.map((s: any) => parseChTimestamp(s.timestamp));
     const traceStart = Math.min(...timestamps);
     const traceEnd = Math.max(...timestamps.map((t: number, i: number) => t + spans[i].durationMs));
     const rootSpan = spans.find((s: any) => !s.parentSpanId) || spans[0];
@@ -220,13 +230,27 @@ app.get('/api/source', (req, res) => {
     }
 
     // Resolve relative to project root, prevent directory traversal
-    const resolved = path.resolve(PROJECT_ROOT, filePath);
+    let resolved = path.resolve(PROJECT_ROOT, filePath);
     if (!resolved.startsWith(PROJECT_ROOT)) {
       return res.status(403).json({ error: 'Access denied: path outside project root' });
     }
 
+    // If not found at repo root, search known subdirectories
+    // (code.filepath from Babel plugin is often relative to the app root, not repo root)
     if (!fs.existsSync(resolved)) {
-      return res.status(404).json({ error: 'File not found', path: filePath });
+      const searchDirs = findSubprojectDirs(PROJECT_ROOT);
+      let found = false;
+      for (const dir of searchDirs) {
+        const candidate = path.resolve(dir, filePath);
+        if (candidate.startsWith(PROJECT_ROOT) && fs.existsSync(candidate)) {
+          resolved = candidate;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        return res.status(404).json({ error: 'File not found', path: filePath });
+      }
     }
 
     const stat = fs.statSync(resolved);
@@ -254,6 +278,34 @@ app.get('/api/source', (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+/**
+ * Find subdirectories that contain package.json (sub-projects/demos).
+ * Cached after first call for performance.
+ */
+let _subprojectDirCache: string[] | null = null;
+function findSubprojectDirs(root: string): string[] {
+  if (_subprojectDirCache) return _subprojectDirCache;
+  const dirs: string[] = [];
+  const searchIn = ['demos', 'apps', 'packages', 'examples'];
+  for (const sub of searchIn) {
+    const subDir = path.join(root, sub);
+    if (fs.existsSync(subDir) && fs.statSync(subDir).isDirectory()) {
+      try {
+        for (const entry of fs.readdirSync(subDir)) {
+          const entryPath = path.join(subDir, entry);
+          if (fs.statSync(entryPath).isDirectory()) {
+            dirs.push(entryPath);
+          }
+        }
+      } catch {}
+    }
+  }
+  // Also include the root itself as last resort
+  dirs.push(root);
+  _subprojectDirCache = dirs;
+  return dirs;
+}
 
 function extToLanguage(ext: string): string {
   const map: Record<string, string> = {

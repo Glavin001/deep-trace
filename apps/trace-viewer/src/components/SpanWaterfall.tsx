@@ -1,4 +1,5 @@
 import type { Span } from '../types';
+import { parseTimestamp } from '../utils';
 
 // Color scheme per service name (cycles through)
 const SERVICE_COLORS = [
@@ -107,7 +108,7 @@ export function SpanWaterfall({ spans, traceStart, traceDuration, selectedSpanId
       {/* Span rows */}
       <div className="border border-surface-3 rounded-lg overflow-hidden">
         {flatSpans.map(({ span, depth }) => {
-          const spanStart = new Date(span.timestamp).getTime() - traceStart;
+          const spanStart = parseTimestamp(span.timestamp) - traceStart;
           const left = traceDuration > 0 ? (spanStart / traceDuration) * 100 : 0;
           const width = traceDuration > 0 ? Math.max((span.durationMs / traceDuration) * 100, 0.5) : 100;
           const colorIdx = serviceColorMap.get(span.serviceName) || 0;
