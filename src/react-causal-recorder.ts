@@ -600,22 +600,142 @@ export function createEffectSpans(
   }
 }
 
+// ===== Hook Patching =====
+// Patches React.useState and React.useReducer to wrap their setter/dispatch functions.
+// When a setter is called, records { componentName, hookIndex, before, after, activeSpanId }
+// so onCommitFiberRoot can correlate the setState with the actual fiber state change.
+
+let hooksPatched = false;
+
+// Track which component is currently rendering (set by the component wrapper)
+let currentRenderingComponent: string | null = null;
+let currentHookIndex = 0;
+
+/**
+ * Called by the probe-wrapper before/after a component renders to track
+ * which component is currently rendering (for hook interception).
+ */
+export function setCurrentRenderingComponent(name: string | null): void {
+  currentRenderingComponent = name;
+  currentHookIndex = 0;
+}
+
+/**
+ * Patch React.useState and React.useReducer to intercept setState/dispatch calls.
+ * This gives us precise causal linking: "setState was called from within this span."
+ *
+ * Inspired by why-did-you-render's hook tracking approach, but emitting OTel span
+ * attributes instead of console logs.
+ */
+export function patchReactHooks(React: any): boolean {
+  if (!React || hooksPatched) return false;
+
+  const originalUseState = React.useState;
+  const originalUseReducer = React.useReducer;
+
+  if (typeof originalUseState !== 'function') return false;
+
+  // Lazy import to avoid circular deps
+  let getCurrentSpanIdFn: (() => string | undefined) | null = null;
+  try {
+    const pw = require('./probe-wrapper');
+    getCurrentSpanIdFn = pw.getCurrentSpanId;
+  } catch {
+    // probe-wrapper not available
+  }
+
+  React.useState = function patchedUseState(initialState: any) {
+    const componentName = currentRenderingComponent;
+    const hookIdx = currentHookIndex++;
+    const result = originalUseState(initialState);
+    const [value, originalSetter] = result;
+
+    // Wrap the setter to record the call
+    const wrappedSetter = function patchedSetState(newValueOrUpdater: any) {
+      const before = value;
+      const after = typeof newValueOrUpdater === 'function'
+        ? newValueOrUpdater(before)
+        : newValueOrUpdater;
+      const activeSpanId = getCurrentSpanIdFn ? getCurrentSpanIdFn() : undefined;
+
+      if (componentName) {
+        recordSetState(componentName, hookIdx, before, after, activeSpanId);
+      }
+
+      return originalSetter(newValueOrUpdater);
+    };
+
+    // Preserve identity for React's referential equality checks
+    // React may use the setter reference for batching optimization
+    try {
+      Object.defineProperty(wrappedSetter, 'name', { value: 'setState', configurable: true });
+    } catch { /* best-effort */ }
+
+    return [value, wrappedSetter];
+  };
+
+  React.useReducer = function patchedUseReducer(reducer: any, initialArg: any, init?: any) {
+    const componentName = currentRenderingComponent;
+    const hookIdx = currentHookIndex++;
+    const result = init !== undefined
+      ? originalUseReducer(reducer, initialArg, init)
+      : originalUseReducer(reducer, initialArg);
+    const [state, originalDispatch] = result;
+
+    const wrappedDispatch = function patchedDispatch(action: any) {
+      const activeSpanId = getCurrentSpanIdFn ? getCurrentSpanIdFn() : undefined;
+
+      if (componentName) {
+        recordSetState(componentName, hookIdx, state, action, activeSpanId);
+      }
+
+      return originalDispatch(action);
+    };
+
+    try {
+      Object.defineProperty(wrappedDispatch, 'name', { value: 'dispatch', configurable: true });
+    } catch { /* best-effort */ }
+
+    return [state, wrappedDispatch];
+  };
+
+  // Preserve React.useState.length for any framework that inspects it
+  try {
+    Object.defineProperty(React.useState, 'length', { value: originalUseState.length, configurable: true });
+    Object.defineProperty(React.useReducer, 'length', { value: originalUseReducer.length, configurable: true });
+  } catch { /* best-effort */ }
+
+  hooksPatched = true;
+  return true;
+}
+
+/**
+ * Unpatch React hooks. Used in tests to restore original behavior.
+ */
+export function unpatchReactHooks(React: any): void {
+  // We can't easily restore originals after patching, so this is a flag reset
+  hooksPatched = false;
+}
+
 // ===== Initialization =====
 
 let causalRecordingInitialized = false;
 
 /**
  * Initialize causal recording. Called from browser-init.ts after React instrumentation.
- * This is a no-op if bippy is not available or already initialized.
+ * Patches React hooks and sets up the causal recording pipeline.
  */
 export function initCausalRecording(): void {
   if (causalRecordingInitialized) return;
   causalRecordingInitialized = true;
 
-  // The actual integration with onCommitFiberRoot is done in react-fiber-extractor.ts
-  // which imports and calls analyzeCommit() and applyAnalysisToSpan().
-  // This function exists as an explicit initialization point and for any future
-  // hook patching setup.
+  // Patch React hooks for setState interception
+  try {
+    const React = require('react');
+    patchReactHooks(React);
+  } catch {
+    // React not available — skip hook patching
+  }
 }
 
 /**

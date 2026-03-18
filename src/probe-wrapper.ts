@@ -11,13 +11,17 @@
 import { trace, context, SpanStatusCode, propagation } from '@opentelemetry/api';
 import type { SourceMetadata } from './types';
 
-// Lazy-load fiber extractor to avoid circular deps and Node.js-only environments
+// Lazy-load fiber extractor and causal recorder to avoid circular deps and Node.js-only environments
 let registerComponentSpanFn: ((span: any, name: string) => void) | null = null;
+let setCurrentRenderingComponentFn: ((name: string | null) => void) | null = null;
 const isBrowser = typeof window !== 'undefined';
 if (isBrowser) {
     // Use dynamic import for browser bundler compatibility (webpack/turbopack)
     import('./react-fiber-extractor')
         .then((extractor) => { registerComponentSpanFn = extractor.registerComponentSpan; })
+        .catch(() => { /* not available */ });
+    import('./react-causal-recorder')
+        .then((recorder) => { setCurrentRenderingComponentFn = recorder.setCurrentRenderingComponent; })
         .catch(() => { /* not available */ });
 }
 
@@ -203,8 +207,18 @@ function wrapFunction(fn: Function, spanName: string, metadata?: SourceMetadata)
         // Push context onto browser stack so fetch and inner functions
         // can find their parent even after async gaps (await).
         pushBrowserCtx(ctx);
+        // Tell the causal recorder which component is rendering so hook
+        // patching can associate useState/useReducer calls with the right component.
+        const isComponent = metadata?.isComponent;
+        if (isComponent && setCurrentRenderingComponentFn) {
+            try { setCurrentRenderingComponentFn(spanName); } catch { /* best-effort */ }
+        }
         try {
             const res = context.with(ctx, () => fn.apply(this, args));
+            // Clear component context after synchronous render completes
+            if (isComponent && setCurrentRenderingComponentFn) {
+                try { setCurrentRenderingComponentFn(null); } catch { /* best-effort */ }
+            }
             if (isPromiseLike(res)) {
                 return res
                     .then((val) => {
@@ -228,6 +242,9 @@ function wrapFunction(fn: Function, spanName: string, metadata?: SourceMetadata)
             span.end();
             return res;
         } catch (err: any) {
+            if (isComponent && setCurrentRenderingComponentFn) {
+                try { setCurrentRenderingComponentFn(null); } catch { /* best-effort */ }
+            }
             span.recordException(err);
             span.setStatus({ code: SpanStatusCode.ERROR, message: String(err?.message || err) });
             popBrowserCtx();

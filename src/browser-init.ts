@@ -194,6 +194,9 @@ function patchGlobalFetch(): void {
             return originalFetch.call(this, input, { ...init, headers })
                 .then((response: Response) => {
                     span.setAttribute('http.status_code', response.status);
+                    // Mark this span as an async resolution for causal linking
+                    // (enrichment engine uses this to create async_resolved edges)
+                    span.setAttribute('dt.react.async_resolved', true);
                     span.setStatus({
                         code: response.ok ? SpanStatusCode.OK : SpanStatusCode.ERROR,
                         message: response.ok ? undefined : `HTTP ${response.status}`,
