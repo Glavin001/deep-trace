@@ -12,6 +12,10 @@ import {
   buildTraceRun,
   compareTraces,
   extractValueSnapshots,
+  whyDidRender as whyDidRenderFromGraph,
+  computeBlastRadius,
+  detectEffectCascadeCycles,
+  detectAsyncRaceConditions,
   type RawSpan,
 } from './enrichment';
 import { redactAttributes } from './redaction';
@@ -19,7 +23,7 @@ import type {
   TraceSummary, TraceRun, TraceDiff, ExecutionGraph,
   GraphNode, ValueSnapshot, ExceptionInfo,
   EvidenceRef, AgentResponse, Visibility, RedactionPolicy,
-  DivergencePoint,
+  DivergencePoint, BlastRadiusSummary, EffectCascadeCycle, AsyncRaceCondition,
 } from './types';
 import { DEFAULT_REDACTION_POLICY } from './types';
 
@@ -688,6 +692,160 @@ export class DeepTraceQueryAPI {
       };
 
       return { success: true, data: diff };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  // ─── React Causal Query Methods (Phase 2) ─────────────────────────────
+
+  /**
+   * Explain why a React component re-rendered.
+   */
+  async whyDidRender(traceId: string, options: {
+    spanId?: string;
+    componentName?: string;
+    renderIndex?: number;
+    visibility?: Visibility;
+  }): Promise<AgentResponse> {
+    try {
+      const rawSpans = await this.fetchSpansForTrace(traceId);
+      if (rawSpans.length === 0) {
+        return { success: false, error: 'Trace not found' };
+      }
+
+      const visibility = options.visibility || 'visible_to_human';
+      const spans = this.redactSpans(rawSpans, visibility);
+      const graph = buildExecutionGraph(spans);
+
+      let targetSpanId = options.spanId;
+      if (!targetSpanId && options.componentName) {
+        // Find the render span for this component
+        const renderSpans = spans.filter(s =>
+          (s.attributes['component.name'] === options.componentName || s.name === options.componentName) &&
+          s.attributes['dt.react.render_cause']
+        );
+        const idx = options.renderIndex !== undefined ? options.renderIndex : renderSpans.length - 1;
+        if (renderSpans[idx]) {
+          targetSpanId = renderSpans[idx].spanId;
+        }
+      }
+
+      if (!targetSpanId) {
+        return { success: false, error: 'Render span not found. Provide span_id or component_name.' };
+      }
+
+      const chain = whyDidRenderFromGraph(graph, targetSpanId);
+      const targetSpan = spans.find(s => s.spanId === targetSpanId);
+      const renderCause = targetSpan?.attributes['dt.react.render_cause'];
+
+      const evidence: EvidenceRef[] = chain.map(c => ({
+        traceId,
+        spanId: c.nodeId.replace('node_', ''),
+        valuePreview: `${c.edgeType}: ${c.nodeName}`,
+      }));
+
+      return {
+        success: true,
+        data: {
+          spanId: targetSpanId,
+          componentName: targetSpan?.attributes['component.name'] || targetSpan?.name,
+          renderCause,
+          changedProps: targetSpan?.attributes['dt.react.changed_props'],
+          changedStateHooks: targetSpan?.attributes['dt.react.changed_state_hooks'],
+          stateBefore: targetSpan?.attributes['dt.react.state_before'],
+          stateAfter: targetSpan?.attributes['dt.react.state_after'],
+          causalChain: chain,
+        },
+        evidence,
+      };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Find the blast radius of a state change.
+   */
+  async blastRadius(traceId: string, stateKey: string, options?: {
+    componentName?: string;
+    visibility?: Visibility;
+  }): Promise<AgentResponse<BlastRadiusSummary>> {
+    try {
+      const rawSpans = await this.fetchSpansForTrace(traceId);
+      if (rawSpans.length === 0) {
+        return { success: false, error: 'Trace not found' };
+      }
+
+      const visibility = options?.visibility || 'visible_to_human';
+      const spans = this.redactSpans(rawSpans, visibility);
+      const graph = buildExecutionGraph(spans);
+      const result = computeBlastRadius(graph, stateKey);
+
+      const evidence: EvidenceRef[] = result.affectedComponents.map(c => ({
+        traceId,
+        spanId: '',
+        valuePreview: `Component ${c} affected by state "${stateKey}"`,
+      }));
+
+      return { success: true, data: result, evidence };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Detect render → effect → setState → render cycles.
+   */
+  async detectEffectCascades(traceId: string, visibility: Visibility = 'visible_to_human'): Promise<AgentResponse<EffectCascadeCycle[]>> {
+    try {
+      const rawSpans = await this.fetchSpansForTrace(traceId);
+      if (rawSpans.length === 0) {
+        return { success: false, error: 'Trace not found' };
+      }
+
+      const spans = this.redactSpans(rawSpans, visibility);
+      const graph = buildExecutionGraph(spans);
+      const cycles = detectEffectCascadeCycles(spans, graph);
+
+      const evidence: EvidenceRef[] = cycles.flatMap(c =>
+        c.sourceLocations.map(loc => ({
+          traceId,
+          spanId: '',
+          sourceLocation: loc,
+          valuePreview: `Effect cascade: ${c.cycle.join(' → ')}`,
+        }))
+      );
+
+      return { success: true, data: cycles, evidence };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Detect async race conditions in state writes.
+   */
+  async detectAsyncRaces(traceId: string, visibility: Visibility = 'visible_to_human'): Promise<AgentResponse<AsyncRaceCondition[]>> {
+    try {
+      const rawSpans = await this.fetchSpansForTrace(traceId);
+      if (rawSpans.length === 0) {
+        return { success: false, error: 'Trace not found' };
+      }
+
+      const spans = this.redactSpans(rawSpans, visibility);
+      const graph = buildExecutionGraph(spans);
+      const races = detectAsyncRaceConditions(spans, graph);
+
+      const evidence: EvidenceRef[] = races.flatMap(r =>
+        r.writers.map(w => ({
+          traceId,
+          spanId: w.spanId,
+          valuePreview: `Async write to "${r.stateKey}" from ${w.fetchUrl || 'unknown'}`,
+        }))
+      );
+
+      return { success: true, data: races, evidence };
     } catch (error: any) {
       return { success: false, error: error.message };
     }

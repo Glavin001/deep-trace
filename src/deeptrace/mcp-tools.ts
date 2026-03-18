@@ -164,6 +164,56 @@ export const TOOL_DEFINITIONS: MCPToolDefinition[] = [
       required: ['trace_a', 'trace_b'],
     },
   },
+  // ─── React Causal Query Tools (Phase 2) ──────────────────────────────────
+  {
+    name: 'why_did_render',
+    description: 'Explain why a React component re-rendered by walking backward through causal edges. Returns the full chain: which state changed, which prop, or if the parent re-rendered unnecessarily.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        trace_id: { type: 'string', description: 'The trace ID' },
+        span_id: { type: 'string', description: 'The span ID of the render to investigate' },
+        component_name: { type: 'string', description: 'Alternative: component name to find' },
+        render_index: { type: 'number', description: 'Which render of this component (0-indexed, default: last)' },
+      },
+      required: ['trace_id'],
+    },
+  },
+  {
+    name: 'blast_radius',
+    description: 'Find all events transitively caused by changes to a specific piece of state. Shows total renders, affected components, unnecessary re-renders (memoization candidates), effect executions, and fetch calls.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        trace_id: { type: 'string', description: 'The trace ID' },
+        state_key: { type: 'string', description: 'State key or hook index to trace (e.g. "userId" or "0")' },
+        component_name: { type: 'string', description: 'Optional: filter to a specific component' },
+      },
+      required: ['trace_id', 'state_key'],
+    },
+  },
+  {
+    name: 'detect_effect_cascades',
+    description: 'Scan a trace for render → useEffect → setState → re-render cycles. These are often bugs (state derived from props should use computed values instead). Returns cycles with source locations and fix recommendations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        trace_id: { type: 'string', description: 'The trace ID to scan' },
+      },
+      required: ['trace_id'],
+    },
+  },
+  {
+    name: 'detect_async_races',
+    description: 'Scan a trace for multiple async operations (fetches, promises) that write to the same state, flagging potential race conditions where resolution order determines which data wins.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        trace_id: { type: 'string', description: 'The trace ID to scan' },
+      },
+      required: ['trace_id'],
+    },
+  },
 ];
 
 // ─── Tool Executor ───────────────────────────────────────────────────────────
@@ -234,6 +284,27 @@ export class MCPToolExecutor {
 
       case 'compare_trace_segments':
         return this.api.compareTraceSegments(args.trace_a, args.trace_b, args.selector, this.visibility);
+
+      // React Causal Query Tools (Phase 2)
+      case 'why_did_render':
+        return this.api.whyDidRender(args.trace_id, {
+          spanId: args.span_id,
+          componentName: args.component_name,
+          renderIndex: args.render_index,
+          visibility: this.visibility,
+        });
+
+      case 'blast_radius':
+        return this.api.blastRadius(args.trace_id, args.state_key, {
+          componentName: args.component_name,
+          visibility: this.visibility,
+        });
+
+      case 'detect_effect_cascades':
+        return this.api.detectEffectCascades(args.trace_id, this.visibility);
+
+      case 'detect_async_races':
+        return this.api.detectAsyncRaces(args.trace_id, this.visibility);
 
       default:
         return { success: false, error: `Unknown tool: ${name}` };

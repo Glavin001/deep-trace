@@ -436,3 +436,121 @@ describe('buildTraceRun', () => {
     expect(run.errorCount).toBe(1);
   });
 });
+
+// ─── React Causal Node/Edge Type Tests ──────────────────────────────────────
+
+describe('React causal node classification', () => {
+  it('classifies react_render for spans with dt.react.render_cause', () => {
+    const span = makeSpan({
+      attributes: {
+        'component.name': 'MyComponent',
+        'dt.react.render_cause': 'state_changed',
+      },
+    });
+    const graph = buildExecutionGraph([span]);
+    expect(graph.nodes[0].type).toBe('react_render');
+  });
+
+  it('classifies effect_execution for spans with dt.react.effect_type', () => {
+    const span = makeSpan({
+      name: 'useEffect [MyComponent#0]',
+      attributes: {
+        'dt.react.effect_type': 'effect',
+        'dt.react.effect_hook_index': 0,
+      },
+    });
+    const graph = buildExecutionGraph([span]);
+    expect(graph.nodes[0].type).toBe('effect_execution');
+  });
+
+  it('classifies dom_event for spans with dt.react.event_type', () => {
+    const span = makeSpan({
+      name: 'click button#submit',
+      attributes: {
+        'dt.react.event_type': 'click',
+        'dt.react.event_target': 'button#submit',
+      },
+    });
+    const graph = buildExecutionGraph([span]);
+    expect(graph.nodes[0].type).toBe('dom_event');
+  });
+
+  it('still classifies logical_operation for React components without causal data', () => {
+    const span = makeSpan({
+      attributes: {
+        'code.function.type': 'react_component',
+        'component.name': 'OldComponent',
+      },
+    });
+    const graph = buildExecutionGraph([span]);
+    expect(graph.nodes[0].type).toBe('logical_operation');
+  });
+});
+
+describe('React causal edge derivation', () => {
+  it('creates prop_changed edge for prop-changed renders', () => {
+    const parent = makeSpan({ spanId: 'parent', name: 'Parent', attributes: { 'dt.react.render_cause': 'state_changed' } });
+    const child = makeSpan({
+      spanId: 'child', parentSpanId: 'parent', name: 'Child',
+      attributes: { 'dt.react.render_cause': 'prop_changed', 'dt.react.changed_props': '["userId"]' },
+    });
+    const graph = buildExecutionGraph([parent, child]);
+    const propEdges = graph.edges.filter(e => e.type === 'prop_changed');
+    expect(propEdges.length).toBe(1);
+    expect(propEdges[0].attributes?.changedProps).toContain('userId');
+  });
+
+  it('creates parent_rerendered edge for unnecessary renders', () => {
+    const parent = makeSpan({ spanId: 'parent', name: 'Parent', attributes: { 'dt.react.render_cause': 'state_changed' } });
+    const child = makeSpan({
+      spanId: 'child', parentSpanId: 'parent', name: 'Child',
+      attributes: { 'dt.react.render_cause': 'parent_rerendered' },
+    });
+    const graph = buildExecutionGraph([parent, child]);
+    expect(graph.edges.some(e => e.type === 'parent_rerendered')).toBe(true);
+  });
+
+  it('creates dep_changed edge for effects', () => {
+    const render = makeSpan({ spanId: 'render', name: 'MyComp', attributes: { 'dt.react.render_cause': 'state_changed' } });
+    const effect = makeSpan({
+      spanId: 'effect', parentSpanId: 'render', name: 'useEffect [MyComp#0]',
+      attributes: { 'dt.react.effect_type': 'effect', 'dt.react.effect_deps_changed': '[0]' },
+    });
+    const graph = buildExecutionGraph([render, effect]);
+    expect(graph.edges.some(e => e.type === 'dep_changed')).toBe(true);
+  });
+
+  it('creates state_changed edge with explicit caller span', () => {
+    const handler = makeSpan({ spanId: 'handler', name: 'handleClick' });
+    const render = makeSpan({
+      spanId: 'render', parentSpanId: 'handler', name: 'App',
+      attributes: {
+        'dt.react.render_cause': 'state_changed',
+        'dt.react.set_state_caller_span_id': 'handler',
+      },
+    });
+    const graph = buildExecutionGraph([handler, render]);
+    const stateEdges = graph.edges.filter(e => e.type === 'state_changed');
+    expect(stateEdges.length).toBe(1);
+    expect(stateEdges[0].sourceNodeId).toBe('node_handler');
+  });
+});
+
+describe('React state value snapshots', () => {
+  it('extracts state_before and state_after snapshots', () => {
+    const span = makeSpan({
+      attributes: {
+        'dt.react.render_cause': 'state_changed',
+        'dt.react.state_before': '{"state[0]":"old"}',
+        'dt.react.state_after': '{"state[0]":"new"}',
+      },
+    });
+    const snapshots = extractValueSnapshots([span]);
+    const beforeSnap = snapshots.find(s => s.boundary === 'state_before');
+    const afterSnap = snapshots.find(s => s.boundary === 'state_after');
+    expect(beforeSnap).toBeDefined();
+    expect(afterSnap).toBeDefined();
+    expect(beforeSnap!.preview).toContain('old');
+    expect(afterSnap!.preview).toContain('new');
+  });
+});

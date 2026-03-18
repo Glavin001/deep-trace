@@ -176,6 +176,44 @@ export function createDeepTraceServer(config: ServerConfig = {}) {
     res.json(result);
   });
 
+  // ─── React Causal Queries (Phase 2) ─────────────────────────────
+
+  app.get('/api/dt/traces/:traceId/why-render', async (req, res) => {
+    const visibility = (req.query.visibility as Visibility) || 'visible_to_human';
+    const result = await api.whyDidRender(req.params.traceId, {
+      spanId: req.query.span_id ? String(req.query.span_id) : undefined,
+      componentName: req.query.component ? String(req.query.component) : undefined,
+      renderIndex: req.query.index !== undefined ? Number(req.query.index) : undefined,
+      visibility,
+    });
+    res.json(result);
+  });
+
+  app.get('/api/dt/traces/:traceId/blast-radius', async (req, res) => {
+    const stateKey = String(req.query.state_key || '');
+    if (!stateKey) {
+      return res.status(400).json({ success: false, error: 'state_key query parameter required' });
+    }
+    const visibility = (req.query.visibility as Visibility) || 'visible_to_human';
+    const result = await api.blastRadius(req.params.traceId, stateKey, {
+      componentName: req.query.component ? String(req.query.component) : undefined,
+      visibility,
+    });
+    res.json(result);
+  });
+
+  app.get('/api/dt/traces/:traceId/effect-cascades', async (req, res) => {
+    const visibility = (req.query.visibility as Visibility) || 'visible_to_human';
+    const result = await api.detectEffectCascades(req.params.traceId, visibility);
+    res.json(result);
+  });
+
+  app.get('/api/dt/traces/:traceId/async-races', async (req, res) => {
+    const visibility = (req.query.visibility as Visibility) || 'visible_to_human';
+    const result = await api.detectAsyncRaces(req.params.traceId, visibility);
+    res.json(result);
+  });
+
   // ─── Services ──────────────────────────────────────────────────────
 
   app.get('/api/dt/services', async (_req, res) => {

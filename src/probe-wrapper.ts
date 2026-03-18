@@ -50,6 +50,17 @@ export function getActiveBrowserContext(): import('@opentelemetry/api').Context 
     return _browserCtxStack.length > 0 ? _browserCtxStack[_browserCtxStack.length - 1] : undefined;
 }
 
+/**
+ * Get the span ID of the currently active browser span.
+ * Used by react-causal-recorder to link setState calls to the active span.
+ */
+export function getCurrentSpanId(): string | undefined {
+    const ctx = getActiveBrowserContext();
+    if (!ctx) return undefined;
+    const span = trace.getSpan(ctx);
+    return span?.spanContext()?.spanId;
+}
+
 function isPromiseLike(val: any): val is Promise<any> {
     return val && typeof val === 'object' && typeof val.then === 'function';
 }

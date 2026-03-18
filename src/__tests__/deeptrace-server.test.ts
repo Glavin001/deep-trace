@@ -422,7 +422,7 @@ describe('DeepTrace HTTP Server', () => {
     it('returns tool definitions', async () => {
       const res = await request(app, 'GET', '/api/agent/tools');
       expect(res.status).toBe(200);
-      expect(res.body.tools).toHaveLength(12);
+      expect(res.body.tools).toHaveLength(16);
       expect(res.body.tools[0].name).toBeTruthy();
       expect(res.body.tools[0].description).toBeTruthy();
       expect(res.body.tools[0].inputSchema).toBeDefined();
@@ -433,7 +433,7 @@ describe('DeepTrace HTTP Server', () => {
     it('returns MCP-compatible tool list', async () => {
       const res = await request(app, 'POST', '/mcp/tools/list');
       expect(res.status).toBe(200);
-      expect(res.body.tools).toHaveLength(12);
+      expect(res.body.tools).toHaveLength(16);
     });
   });
 

@@ -13,6 +13,14 @@
 
 import type { Span } from '@opentelemetry/api';
 
+// Conditionally import causal recorder — browser-side only
+let causalRecorder: typeof import('./react-causal-recorder') | null = null;
+try {
+    causalRecorder = require('./react-causal-recorder');
+} catch {
+    // Causal recorder not available — graceful degradation
+}
+
 // Conditionally import bippy — it may not be available in Node.js-only environments
 let bippyCore: typeof import('bippy') | null = null;
 try {
@@ -163,6 +171,22 @@ export function initReactInstrumentation(): void {
                         return false; // continue traversal
                     });
 
+                    // Run causal analysis on the committed fiber tree
+                    let causalAnalyses: Map<string, ReturnType<typeof causalRecorder.analyzeCommit>[number]> | undefined;
+                    if (causalRecorder) {
+                        try {
+                            const analyses = causalRecorder.analyzeCommit(root, bippy);
+                            if (analyses.length > 0) {
+                                causalAnalyses = new Map();
+                                for (const analysis of analyses) {
+                                    causalAnalyses.set(analysis.componentName, analysis);
+                                }
+                            }
+                        } catch {
+                            // Causal analysis is best-effort
+                        }
+                    }
+
                     // Match pending spans to fibers by component name
                     const cutoff = Date.now() - PENDING_SPAN_TTL;
                     const remaining: PendingComponentSpan[] = [];
@@ -195,6 +219,20 @@ export function initReactInstrumentation(): void {
                                 // (Babel source is more accurate, fiber source is fallback)
                                 pending.span.setAttribute('component.fiber.source', source.fileName);
                             }
+
+                            // Apply causal analysis attributes to the span
+                            if (causalRecorder && causalAnalyses) {
+                                const analysis = causalAnalyses.get(pending.componentName);
+                                if (analysis) {
+                                    try {
+                                        causalRecorder.applyAnalysisToSpan(pending.span, analysis);
+                                        causalRecorder.createEffectSpans(analysis, pending.span);
+                                    } catch {
+                                        // Causal attribute emission is best-effort
+                                    }
+                                }
+                            }
+
                             // Don't add to remaining — consumed
                         } else {
                             remaining.push(pending);
