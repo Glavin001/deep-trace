@@ -172,7 +172,7 @@ export function initReactInstrumentation(): void {
                     });
 
                     // Run causal analysis on the committed fiber tree
-                    let causalAnalyses: Map<string, ReturnType<typeof causalRecorder.analyzeCommit>[number]> | undefined;
+                    let causalAnalyses: Map<string, import('./react-causal-recorder').FiberRenderAnalysis> | undefined;
                     if (causalRecorder) {
                         try {
                             const analyses = causalRecorder.analyzeCommit(root, bippy);
