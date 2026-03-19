@@ -1,0 +1,6 @@
+{
+  "name": "with-context-api",
+  "appPort": 3903,
+  "spanCachePort": 43903,
+  "description": "Client-side interactivity with React Context, counter buttons, and navigation"
+}

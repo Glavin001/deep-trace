@@ -1,0 +1,6 @@
+{
+  "name": "blog-starter",
+  "appPort": 3901,
+  "spanCachePort": 43901,
+  "description": "SSG blog with React components, markdown rendering, navigation"
+}

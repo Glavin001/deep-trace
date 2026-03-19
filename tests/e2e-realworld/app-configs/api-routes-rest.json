@@ -1,0 +1,6 @@
+{
+  "name": "api-routes-rest",
+  "appPort": 3902,
+  "spanCachePort": 43902,
+  "description": "REST API routes with CRUD operations"
+}

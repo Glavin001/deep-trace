@@ -1,0 +1,6 @@
+{
+  "name": "hello-world",
+  "appPort": 3904,
+  "spanCachePort": 43904,
+  "description": "Minimal baseline — if this fails, something is fundamentally wrong"
+}

@@ -1,0 +1,7 @@
+services:
+  e2e-realworld:
+    build:
+      context: ../..
+      dockerfile: tests/e2e-realworld/Dockerfile
+    tmpfs:
+      - /tmp/deep-trace-e2e-realworld

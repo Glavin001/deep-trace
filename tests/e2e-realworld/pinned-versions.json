@@ -1,0 +1,10 @@
+{
+  "repo": "https://github.com/vercel/next.js.git",
+  "sha": "98e1133f26ee85d2de4d05f027f67eb18c15c2b0",
+  "examples": [
+    "blog-starter",
+    "api-routes-rest",
+    "with-context-api",
+    "hello-world"
+  ]
+}
