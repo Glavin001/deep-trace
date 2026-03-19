@@ -21,8 +21,16 @@ describe('TOOL_DEFINITIONS', () => {
     expect(toolNames).toContain('compare_trace_segments');
   });
 
-  it('has 12 tools total', () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(12);
+  it('has 16 tools total (12 original + 4 React causal)', () => {
+    expect(TOOL_DEFINITIONS).toHaveLength(16);
+  });
+
+  it('defines React causal query tools', () => {
+    const toolNames = TOOL_DEFINITIONS.map(t => t.name);
+    expect(toolNames).toContain('why_did_render');
+    expect(toolNames).toContain('blast_radius');
+    expect(toolNames).toContain('detect_effect_cascades');
+    expect(toolNames).toContain('detect_async_races');
   });
 
   it('every tool has name, description, and inputSchema', () => {
@@ -53,7 +61,7 @@ describe('MCPToolExecutor', () => {
   it('getToolDefinitions returns all tools', () => {
     // We can't create a real executor without ClickHouse, but we can test the static method
     // by checking TOOL_DEFINITIONS directly
-    expect(TOOL_DEFINITIONS.length).toBe(12);
+    expect(TOOL_DEFINITIONS.length).toBe(16);
   });
 
   it('tool definitions have valid JSON schemas', () => {
@@ -67,5 +75,30 @@ describe('MCPToolExecutor', () => {
         }
       }
     }
+  });
+});
+
+describe('React causal tool schemas', () => {
+  it('why_did_render requires trace_id', () => {
+    const tool = TOOL_DEFINITIONS.find(t => t.name === 'why_did_render')!;
+    expect(tool.inputSchema.required).toContain('trace_id');
+    expect(tool.inputSchema.properties.span_id).toBeDefined();
+    expect(tool.inputSchema.properties.component_name).toBeDefined();
+  });
+
+  it('blast_radius requires trace_id and state_key', () => {
+    const tool = TOOL_DEFINITIONS.find(t => t.name === 'blast_radius')!;
+    expect(tool.inputSchema.required).toContain('trace_id');
+    expect(tool.inputSchema.required).toContain('state_key');
+  });
+
+  it('detect_effect_cascades requires trace_id', () => {
+    const tool = TOOL_DEFINITIONS.find(t => t.name === 'detect_effect_cascades')!;
+    expect(tool.inputSchema.required).toContain('trace_id');
+  });
+
+  it('detect_async_races requires trace_id', () => {
+    const tool = TOOL_DEFINITIONS.find(t => t.name === 'detect_async_races')!;
+    expect(tool.inputSchema.required).toContain('trace_id');
   });
 });

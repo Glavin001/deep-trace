@@ -51,9 +51,20 @@ function getConfig() {
     };
 }
 
+// ===== 0. React Causal Recording (lazy init — actual work happens in onCommitFiberRoot) =====
+
+let initCausalRecordingFn: (() => void) | null = null;
+try {
+    const recorder = require('./react-causal-recorder');
+    initCausalRecordingFn = recorder.initCausalRecording;
+} catch {
+    // Causal recorder not available — graceful degradation
+}
+
 // ===== 1. React Fiber Instrumentation (must happen before React loads) =====
 
 initReactInstrumentation();
+if (initCausalRecordingFn) initCausalRecordingFn();
 
 // ===== 2. Browser Telemetry Initialization =====
 
@@ -183,6 +194,9 @@ function patchGlobalFetch(): void {
             return originalFetch.call(this, input, { ...init, headers })
                 .then((response: Response) => {
                     span.setAttribute('http.status_code', response.status);
+                    // Mark this span as an async resolution for causal linking
+                    // (enrichment engine uses this to create async_resolved edges)
+                    span.setAttribute('dt.react.async_resolved', true);
                     span.setStatus({
                         code: response.ok ? SpanStatusCode.OK : SpanStatusCode.ERROR,
                         message: response.ok ? undefined : `HTTP ${response.status}`,
@@ -219,6 +233,7 @@ initBrowserTelemetry();
 // ===== Re-exports for advanced usage =====
 
 export { initReactInstrumentation } from './react-fiber-extractor';
+export { initCausalRecording } from './react-causal-recorder';
 export { initBrowserTelemetry, patchGlobalFetch };
 
 /**

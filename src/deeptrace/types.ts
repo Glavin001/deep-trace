@@ -18,7 +18,10 @@ export type NodeType =
   | 'exception'
   | 'value_snapshot'
   | 'source_location'
-  | 'user_action';
+  | 'user_action'
+  | 'react_render'
+  | 'effect_execution'
+  | 'dom_event';
 
 // ─── Edge Types ──────────────────────────────────────────────────────────────
 
@@ -33,7 +36,16 @@ export type EdgeType =
   | 'state_read_from'
   | 'state_written_by'
   | 'caused_error'
-  | 'source_mapped_to';
+  | 'source_mapped_to'
+  | 'state_changed'
+  | 'prop_changed'
+  | 'parent_rerendered'
+  | 'context_changed'
+  | 'dep_changed'
+  | 'effect_caused'
+  | 'dom_event_triggered'
+  | 'set_state'
+  | 'async_resolved';
 
 // ─── Capture Tiers ───────────────────────────────────────────────────────────
 
@@ -143,7 +155,7 @@ export interface ValueSnapshot {
   id: string;
   traceId: string;
   spanId: string;
-  boundary: 'entry' | 'exit' | 'exception' | 'request' | 'response' | 'query' | 'state_change';
+  boundary: 'entry' | 'exit' | 'exception' | 'request' | 'response' | 'query' | 'state_change' | 'state_before' | 'state_after';
   name: string;
   typeClassification: string;
   preview: string;
@@ -300,4 +312,56 @@ export interface CHSpan {
   EventNames?: string[];
   EventTimestamps?: string[];
   EventAttributes?: string[];
+}
+
+// ─── React Causal Types ───────────────────────────────────────────────────
+
+/** Render cause for a React component re-render. */
+export type RenderCauseType =
+  | 'initial_mount'
+  | 'state_changed'
+  | 'prop_changed'
+  | 'parent_rerendered'
+  | 'context_changed';
+
+/** State transition record for a single hook state change. */
+export interface StateTransition {
+  componentName: string;
+  hookIndex: number;
+  before: string;
+  after: string;
+  causingEvent: string;
+  timestamp: number;
+}
+
+/** Blast radius summary for a state key. */
+export interface BlastRadiusSummary {
+  stateKey: string;
+  totalRenders: number;
+  affectedComponents: string[];
+  unnecessaryRenders: number;
+  effectExecutions: number;
+  fetchCalls: number;
+  stateChanges: number;
+}
+
+/** An effect cascade cycle detected in a trace. */
+export interface EffectCascadeCycle {
+  cycle: string[];
+  sourceLocations: SourceLocation[];
+  recommendation: string;
+  severity: 'warning' | 'critical';
+}
+
+/** An async race condition detected in a trace. */
+export interface AsyncRaceCondition {
+  stateKey: string;
+  writers: Array<{
+    spanId: string;
+    fetchUrl?: string;
+    resolvedAt: number;
+    initiatedAt: number;
+  }>;
+  issue: string;
+  recommendation: string;
 }
