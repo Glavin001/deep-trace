@@ -10,7 +10,12 @@
 export { wrapUserFunction } from './probe-wrapper';
 
 // --- Types ---
-export type { SourceMetadata } from './types';
+export type { SourceMetadata, CachedSpan } from './types';
+
+// --- Span ingestion (for multi-language support) ---
+export { validateSpanInput, normalizeSpanInput, ingestSpans } from './span-ingestion';
+export type { IngestSpanInput, IngestResult, ValidationResult } from './span-ingestion';
+export { setupWebSocket } from './ws-server';
 
 // --- React fiber extraction (browser-only, gracefully no-ops in Node.js) ---
 export {
