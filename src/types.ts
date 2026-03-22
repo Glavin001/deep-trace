@@ -15,3 +15,19 @@ export interface SourceMetadata {
     /** True when the function is an HTTP handler (GET, POST, etc.) that receives a Request object. */
     isHttpHandler?: boolean;
 }
+
+/** A cached span stored in the in-memory ring buffer. */
+export interface CachedSpan {
+    traceId: string;
+    spanId: string;
+    parentSpanId?: string;
+    name: string;
+    kind: string;
+    startTime: number;
+    endTime: number;
+    duration: number;
+    status: { code: number; message?: string };
+    attributes: Record<string, any>;
+    events: Array<{ name: string; timestamp: number; attributes: Record<string, any> }>;
+    links: Array<{ traceId: string; spanId: string; attributes: Record<string, any> }>;
+}

@@ -33,7 +33,7 @@ import * as fs from 'fs';
 import { inspect } from 'util';
 import express, { Request, Response } from 'express';
 import { buildRuntimeConfig, isInternalSpanRequest, RuntimeConfig } from './runtime-config';
-import type { SourceMetadata } from './types';
+import type { SourceMetadata, CachedSpan } from './types';
 import { getCallerLocation } from './v8-source-location';
 
 // ===== Configuration (env vars) =====
@@ -75,21 +75,6 @@ const log = {
 
 // ===== Span Cache (in-memory ring buffer) =====
 
-interface CachedSpan {
-    traceId: string;
-    spanId: string;
-    parentSpanId?: string;
-    name: string;
-    kind: string;
-    startTime: number;
-    endTime: number;
-    duration: number;
-    status: { code: number; message?: string };
-    attributes: Record<string, any>;
-    events: Array<{ name: string; timestamp: number; attributes: Record<string, any> }>;
-    links: Array<{ traceId: string; spanId: string; attributes: Record<string, any> }>;
-}
-
 class SpanCache {
     private spans = new Map<string, CachedSpan>();
     private maxSpans: number;
@@ -124,6 +109,11 @@ class SpanCache {
             })),
         };
         this.spans.set(rec.spanId, rec);
+        if (this.spans.size > this.maxSpans * 0.85) this.cleanup();
+    }
+
+    addCachedSpan(span: CachedSpan): void {
+        this.spans.set(span.spanId, span);
         if (this.spans.size > this.maxSpans * 0.85) this.cleanup();
     }
 
@@ -223,7 +213,7 @@ const spanCache = new SpanCache(MAX_SPANS);
 
 // ===== JSONL File Writer =====
 
-function appendToJsonl(span: CachedSpan): void {
+export function appendToJsonl(span: CachedSpan): void {
     if (!ENABLE_JSONL) return;
     try {
         ensureDir(JSONL_DIR);
@@ -596,6 +586,7 @@ let serverStarted = false;
 function startServer() {
     if (serverStarted || SERVER_PORT <= 0) return;
     const app = express();
+    app.use(express.json({ limit: '1mb' }));
 
     function formatSpan(s: CachedSpan) {
         return {
@@ -679,6 +670,30 @@ function startServer() {
         }
     });
 
+    // ─── Span Ingestion (POST) ─────────────────────────────────────────
+    app.post('/remote-debug/spans', (req: Request, res: Response) => {
+        try {
+            const { ingestSpans } = require('./span-ingestion');
+            const body = req.body;
+            const inputs = Array.isArray(body) ? body : [body];
+            const result = ingestSpans(spanCache, inputs, appendToJsonl);
+
+            if (result.accepted === 0 && result.rejected.length > 0) {
+                res.status(400).json({
+                    success: false,
+                    error: 'No valid spans in request',
+                    rejected: result.rejected,
+                });
+            } else {
+                const response: any = { success: true, accepted: result.accepted };
+                if (result.rejected.length > 0) response.rejected = result.rejected;
+                res.json(response);
+            }
+        } catch (error: any) {
+            res.status(500).json({ success: false, error: error?.message });
+        }
+    });
+
     const SERVER_HOST = runtimeConfig.serverHost;
     const server = app.listen(SERVER_PORT, SERVER_HOST, () => {
         serverStarted = true;
@@ -691,6 +706,18 @@ function startServer() {
             log.info(`Debug probe server error: ${err.message}`);
         }
     });
+
+    // Defer WebSocket setup to next tick to avoid vitest module resolution interference.
+    // The ws module patches HTTP internals which conflicts with OTel's HTTP instrumentation
+    // when resolved at import-time by vitest's module transformer.
+    setTimeout(() => {
+        try {
+            const { setupWebSocket } = require('./ws-server');
+            setupWebSocket(server, spanCache, appendToJsonl, log, runtimeConfig, SERVER_PORT);
+        } catch {
+            log.info('WebSocket support unavailable (ws package not installed)');
+        }
+    }, 0);
 }
 
 // ===== OTel SDK Init =====
